@@ -17,7 +17,7 @@ data "aws_region" "current" {}
 # Use existing OIDC provider if ARN given or use_existing_oidc_provider; otherwise create it
 locals {
   existing_oidc_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
-  oidc_arn = var.oidc_provider_arn != "" ? var.oidc_provider_arn : (var.use_existing_oidc_provider ? local.existing_oidc_arn : aws_iam_openid_connect_provider.github[0].arn)
+  oidc_arn          = var.oidc_provider_arn != "" ? var.oidc_provider_arn : (var.use_existing_oidc_provider ? local.existing_oidc_arn : aws_iam_openid_connect_provider.github[0].arn)
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -42,14 +42,15 @@ data "aws_iam_policy_document" "github_trust" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
-    # Allow: push to main, pull_request, and PR merge ref (GitHub can send ref:refs/pull/N/merge)
+    # Allow: push to main, pull_request, PR merge ref, and job with environment (e.g. environment: production)
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [
+      values = [
         "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}",
         "repo:${var.github_repo}:pull_request",
-        "repo:${var.github_repo}:ref:refs/pull/*/merge"
+        "repo:${var.github_repo}:ref:refs/pull/*/merge",
+        "repo:${var.github_repo}:environment:${var.github_environment}"
       ]
     }
   }
