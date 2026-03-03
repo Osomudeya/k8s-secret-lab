@@ -1,11 +1,16 @@
 # ------------------------------------------------------------------
 # External Secrets Operator — installed via Helm in Terraform
-# This keeps ESO installation in your IaC, not a manual command.
-# Pinned to 0.9.x for stability; current stable is 0.10.x — if you upgrade,
-# check ESO changelog for ClusterSecretStore/ExternalSecret API changes.
+# Only runs when connecting to EKS (use_eks=true or create_eks=true).
+# For local MicroK8s: ESO is installed by spinup.sh directly.
 # ------------------------------------------------------------------
 
+locals {
+  install_eso = var.use_eks || var.create_eks
+}
+
 resource "helm_release" "external_secrets" {
+  count = local.install_eso ? 1 : 0
+
   name             = "external-secrets"
   repository       = "https://charts.external-secrets.io"
   chart            = "external-secrets"
@@ -13,42 +18,41 @@ resource "helm_release" "external_secrets" {
   create_namespace = true
   version          = "0.9.11"
 
-  # Install the CRDs (ExternalSecret, ClusterSecretStore, etc.)
   set {
     name  = "installCRDs"
     value = "true"
   }
 
-  # Annotate the ServiceAccount with the IAM role ARN (IRSA)
+  # Annotate the ServiceAccount with the IRSA role ARN
   set {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
     value = aws_iam_role.eso_role.arn
   }
 
-  # Wait for all pods to be ready before continuing
   wait    = true
   timeout = 300
-
-  # When using EKS in CI, GitHub Actions role must have cluster access before Helm can run
-  depends_on = [
-    aws_eks_access_entry.github_actions,
-    aws_eks_access_policy_association.github_actions_admin
-  ]
 }
 
-# ESO CRDs need time to register after Helm install. Without this sleep, the
-# ClusterSecretStore apply fails with "no kind ClusterSecretStore".
+# ESO CRDs need time to register after Helm install.
+# Without this the ClusterSecretStore apply below fails with
+# "no kind ClusterSecretStore is registered".
 resource "time_sleep" "wait_eso_crds" {
+  count = local.install_eso ? 1 : 0
+
   depends_on      = [helm_release.external_secrets]
   create_duration = "30s"
 }
 
 # ------------------------------------------------------------------
-# ClusterSecretStore — tells ESO WHERE secrets come from
-# Cluster-scoped: any namespace can reference this store
+# ClusterSecretStore — tells ESO where secrets come from (AWS SM)
+# Cluster-scoped: any namespace can reference this store.
+# Uses IRSA (JWT auth) — works on EKS only.
+# For MicroK8s: apply k8s/aws/secret-store-static.yaml instead.
 # ------------------------------------------------------------------
 resource "kubectl_manifest" "cluster_secret_store" {
-  depends_on = [time_sleep.wait_eso_crds] # Wait for CRDs before applying ClusterSecretStore
+  count = local.install_eso ? 1 : 0
+
+  depends_on = [time_sleep.wait_eso_crds]
 
   yaml_body = <<-YAML
     apiVersion: external-secrets.io/v1beta1

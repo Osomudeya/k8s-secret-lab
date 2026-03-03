@@ -125,6 +125,13 @@ resource "aws_eks_cluster" "cluster" {
     endpoint_public_access = true
   }
 
+  # Required for EKS Access Entries (e.g. GitHub Actions OIDC role). Default is CONFIG_MAP only.
+  # Set bootstrap_cluster_creator_admin_permissions so config matches existing clusters and avoids replacement.
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy
   ]
