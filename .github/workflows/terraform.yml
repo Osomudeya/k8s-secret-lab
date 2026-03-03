@@ -75,6 +75,28 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+      # When EKS_CLUSTER_NAME is set, Terraform must use create_eks/use_eks true so plan doesn't destroy EKS
+      - name: Set EKS Terraform vars
+        run: |
+          if [ -n "$EKS_CLUSTER_NAME" ]; then
+            echo "TF_VAR_create_eks=true" >> $GITHUB_ENV
+            echo "TF_VAR_use_eks=true" >> $GITHUB_ENV
+            echo "TF_VAR_cluster_name=$EKS_CLUSTER_NAME" >> $GITHUB_ENV
+          fi
+        env:
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+
+      # Helm/kubectl providers need kubeconfig when use_eks = true
+      - name: Configure kubeconfig for EKS
+        env:
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+        run: |
+          if [ -n "$EKS_CLUSTER_NAME" ]; then
+            mkdir -p ~/.kube
+            aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+          fi
+
       # On PRs: show the plan as a comment — team reviews before merge
       - name: Terraform Plan
         id: plan

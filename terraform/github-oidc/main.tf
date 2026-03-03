@@ -149,6 +149,8 @@ data "aws_iam_policy_document" "github_actions" {
     effect = "Allow"
     actions = [
       "eks:DescribeCluster",
+      "eks:DescribeNodegroup",
+      "eks:ListNodegroups",
       "eks:ListClusters"
     ]
     resources = ["*"]
