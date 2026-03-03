@@ -67,18 +67,6 @@ jobs:
             [ -n "$AWS_ROLE_ARN" ] && echo "TF_VAR_github_actions_role_arn=$AWS_ROLE_ARN" >> $GITHUB_ENV
           fi
 
-      - name: Bootstrap EKS access for CI
-        env:
-          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-        run: |
-          if [ -n "$EKS_CLUSTER_NAME" ]; then
-            terraform plan -input=false -no-color \
-              -target=aws_eks_access_entry.github_actions \
-              -target=aws_eks_access_policy_association.github_actions_admin \
-              -out=tfplan.bootstrap
-            terraform apply -input=false -auto-approve tfplan.bootstrap
-          fi
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -103,6 +91,18 @@ jobs:
           else
             echo "⚠ TF_BACKEND_BUCKET not set — using local state (run spinup.sh to configure backend)"
             terraform init -backend=false
+          fi
+
+      - name: Bootstrap EKS access for CI
+        env:
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+        run: |
+          if [ -n "$EKS_CLUSTER_NAME" ]; then
+            terraform plan -input=false -no-color \
+              -target=aws_eks_access_entry.github_actions \
+              -target=aws_eks_access_policy_association.github_actions_admin \
+              -out=tfplan.bootstrap
+            terraform apply -input=false -auto-approve tfplan.bootstrap
           fi
 
       - name: Terraform Format Check
