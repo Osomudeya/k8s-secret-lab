@@ -14,13 +14,14 @@ terraform {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
-# Use existing OIDC provider if ARN given; otherwise create it
+# Use existing OIDC provider if ARN given or use_existing_oidc_provider; otherwise create it
 locals {
-  oidc_arn = var.oidc_provider_arn != "" ? var.oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
+  existing_oidc_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
+  oidc_arn = var.oidc_provider_arn != "" ? var.oidc_provider_arn : (var.use_existing_oidc_provider ? local.existing_oidc_arn : aws_iam_openid_connect_provider.github[0].arn)
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count = var.oidc_provider_arn != "" ? 0 : 1
+  count = (var.oidc_provider_arn != "" || var.use_existing_oidc_provider) ? 0 : 1
 
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]

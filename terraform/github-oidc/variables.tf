@@ -20,3 +20,9 @@ variable "oidc_provider_arn" {
   type        = string
   default     = ""
 }
+
+variable "use_existing_oidc_provider" {
+  description = "Set to true if the GitHub OIDC provider (token.actions.githubusercontent.com) already exists in your account (e.g. created manually or for another repo). Terraform will skip creating it and use the existing provider ARN."
+  type        = bool
+  default     = false
+}

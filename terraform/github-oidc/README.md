@@ -19,9 +19,21 @@ Example: `-var="github_repo=Osomudeya/k8s-secrets-lab"`. Default branch is `main
 
 ---
 
-## If you already created the OIDC provider manually
+## If the OIDC provider already exists (e.g. EntityAlreadyExists)
 
-Pass its ARN so Terraform skips creating it and only creates the role:
+If you see **Provider with url https://token.actions.githubusercontent.com already exists**, use the existing provider and only create/update the role:
+
+```bash
+terraform apply \
+  -var="github_repo=Osomudeya/k8s-secrets-lab" \
+  -var="use_existing_oidc_provider=true"
+```
+
+Terraform will skip creating the provider and use the one in your account.
+
+---
+
+## If you already have the provider and want to pass its ARN
 
 ```bash
 terraform apply \
@@ -29,7 +41,7 @@ terraform apply \
   -var="oidc_provider_arn=arn:aws:iam::YOUR_ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
 ```
 
-Find the ARN in **IAM → Identity providers → token.actions.githubusercontent.com**, or leave `oidc_provider_arn` empty and Terraform will create the provider.
+Find the ARN in **IAM → Identity providers → token.actions.githubusercontent.com**.
 
 ---
 

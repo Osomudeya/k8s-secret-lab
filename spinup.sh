@@ -368,6 +368,24 @@ if [[ -n "$SECRET_DELETED_DATE" && "$SECRET_DELETED_DATE" != "None" ]]; then
 fi
 
 # =============================================================================
+# Pre-flight: import secret if it exists in AWS but not in Terraform state
+# (e.g. state was lost, new backend, or a previous run failed after creating it)
+# =============================================================================
+if aws secretsmanager describe-secret --secret-id "$CHECK_SECRET_NAME" --region "${AWS_REGION}" &>/dev/null; then
+  if ! terraform state show aws_secretsmanager_secret.app_db &>/dev/null; then
+    warn "Secret '$CHECK_SECRET_NAME' exists in AWS but is not in Terraform state."
+    warn "Importing it so Terraform can manage it (avoids ResourceExistsException)..."
+    if terraform import -input=false aws_secretsmanager_secret.app_db "$CHECK_SECRET_NAME"; then
+      ok "Secret imported into state."
+    else
+      err "Import failed. Run manually then re-run spinup:"
+      err "  cd $TF_DIR && terraform import aws_secretsmanager_secret.app_db $CHECK_SECRET_NAME"
+      exit 1
+    fi
+  fi
+fi
+
+# =============================================================================
 # STEP 7 — Terraform plan
 # =============================================================================
 step "Step 7/13 — Terraform plan"
@@ -632,6 +650,9 @@ ok ".lab-state written → $STATE_FILE"
 # =============================================================================
 # Optional: set GitHub Actions secrets so CI can use S3 backend and EKS cluster name
 # =============================================================================
+CLUSTER_NAME_FOR_CI="${EKS_CLUSTER_NAME:-secrets-lab}"
+[[ "$CLUSTER_TYPE" == "microk8s" ]] && CLUSTER_NAME_FOR_CI="secrets-lab"
+
 if command -v gh &>/dev/null && [[ "$DRY_RUN" != "true" ]] && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
   step "Setting GitHub Actions secrets (for CI handoff)"
   if (cd "$REPO_ROOT" && gh auth status &>/dev/null); then
@@ -642,8 +663,6 @@ if command -v gh &>/dev/null && [[ "$DRY_RUN" != "true" ]] && git -C "$REPO_ROOT
         gh secret set TF_BACKEND_REGION --body "$AWS_REGION" 2>/dev/null && ok "TF_BACKEND_REGION set" || true
         gh secret set TF_BACKEND_DYNAMO --body "$DYNAMO_TABLE" 2>/dev/null && ok "TF_BACKEND_DYNAMO set" || true
       }
-      CLUSTER_NAME_FOR_CI="$EKS_CLUSTER_NAME"
-      [[ "$CLUSTER_TYPE" == "microk8s" ]] && CLUSTER_NAME_FOR_CI="secrets-lab"
       gh secret set EKS_CLUSTER_NAME --body "$CLUSTER_NAME_FOR_CI" 2>/dev/null && ok "EKS_CLUSTER_NAME set → $CLUSTER_NAME_FOR_CI" || true
       gh secret set AWS_REGION --body "$AWS_REGION" 2>/dev/null && ok "AWS_REGION set" || true
     )

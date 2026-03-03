@@ -40,14 +40,22 @@ After the first spinup, **git push** to `main` drives everything:
 - **terraform.yml** — On push/PR that change `terraform/**`: plan on PR (comment), apply on merge to main. Uses `TF_BACKEND_*` secrets for state.
 - **deploy.yml** — On push to main that change `k8s/**` or `app/**`: build and push the app image, deploy to EKS, write ALB URL to the run summary.
 
-No manual Terraform or kubectl after the first bootstrap. Set these **repo secrets** (spinup sets most if you use `gh`):
+No manual Terraform or kubectl after the first bootstrap. Configure **Repository secrets** (GitHub → Settings → Secrets and variables → Actions → New repository secret). Spinup sets the backend and EKS ones for you if `gh` is installed and authenticated; otherwise add them manually.
 
-| Secret | Purpose |
-|--------|---------|
-| `AWS_ROLE_ARN` | OIDC role for Terraform and Deploy workflows. Create via [terraform/github-oidc](terraform/github-oidc/README.md) or IAM console. |
-| `TF_BACKEND_BUCKET`, `TF_BACKEND_REGION`, `TF_BACKEND_DYNAMO` | S3 state backend. Set by spinup when `gh` is used; otherwise set manually. |
-| `EKS_CLUSTER_NAME`, `AWS_REGION` | EKS cluster name and region. Set by spinup when `gh` is used. |
-| `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | So deploy.yml can build and push the app image. |
+### Repository secrets
+
+| Secret | Purpose | Where to get it |
+|--------|---------|-----------------|
+| **AWS_ROLE_ARN** | OIDC role for Terraform and Deploy workflows (no long-lived keys). | Create via [terraform/github-oidc](terraform/github-oidc/README.md), then `cd terraform/github-oidc && terraform output role_arn`. If provider already exists: `terraform apply -var="github_repo=OWNER/REPO" -var="use_existing_oidc_provider=true"` then copy the output ARN. |
+| **AWS_REGION** | AWS region for EKS and Terraform. | e.g. `us-east-1`. |
+| **TF_BACKEND_BUCKET** | S3 bucket for Terraform state. | From spinup output or AWS S3: `k8s-secrets-lab-tfstate-<ACCOUNT_ID>-<REGION>` (e.g. `k8s-secrets-lab-tfstate-334091769766-us-east-1`). |
+| **TF_BACKEND_REGION** | Region of the state bucket. | Same as **AWS_REGION**, e.g. `us-east-1`. |
+| **TF_BACKEND_DYNAMO** | DynamoDB table for state locking. | `k8s-secrets-lab-tflock`. |
+| **EKS_CLUSTER_NAME** | EKS cluster name for deploy and teardown. | From spinup (default `secrets-lab`). |
+| **DOCKERHUB_USERNAME** | Docker Hub username for the app image. | Your Docker Hub login. |
+| **DOCKERHUB_TOKEN** | Docker Hub token (or password) for push. | Docker Hub → Account Settings → Security → New Access Token. |
+
+**Optional:** `ALB_URL` — If set, the Deploy workflow uses it for the verify step instead of resolving the LoadBalancer from the cluster.
 
 ---
 
@@ -88,4 +96,7 @@ So that “plan on PR, apply on merge” is enforced: Repo → Settings → Bran
 | **TF_BACKEND_BUCKET not set** | Run spinup with `gh auth login` so it can set secrets, or add `TF_BACKEND_BUCKET`, `TF_BACKEND_REGION`, `TF_BACKEND_DYNAMO` manually (bucket name from spinup output: `k8s-secrets-lab-tfstate-<account>-<region>`). |
 | **Deploy workflow can’t reach cluster** | Ensure `EKS_CLUSTER_NAME` and `AWS_REGION` match your cluster. |
 | **ALB pending** | On EKS, the Service gets a LoadBalancer; it can take 1–2 minutes for the hostname to appear. Check `kubectl get svc myapp -n default`. |
+| **Requested AMI for this version 1.28 is not supported** | EKS 1.28 AMIs are deprecated. The repo uses 1.30 and AL2023; pull latest and re-run. If you changed the version, set `ami_type = "AL2023_x86_64_STANDARD"` and use a supported version (e.g. 1.30). |
+| **Secret prod/myapp/database already exists** | A previous run created the secret but Terraform state doesn't have it. Either **import** it: `cd terraform/aws && terraform import aws_secretsmanager_secret.app_db prod/myapp/database` then apply again; or **delete** it in AWS (if in 7-day recovery: `aws secretsmanager restore-secret --secret-id prod/myapp/database` then `aws secretsmanager delete-secret --secret-id prod/myapp/database --force-delete-without-recovery`) and apply again. |
+| **Helm release created but has a failed status / context deadline exceeded** | Usually because the node group failed (e.g. unsupported AMI) so ESO pods never become ready. Fix the node group (see AMI row above), then run `helm uninstall external-secrets -n external-secrets` and `terraform apply` again so Terraform recreates the release. |
 | **ESO not syncing on EKS** | ClusterSecretStore uses IRSA. Ensure the ESO ServiceAccount is annotated with the role ARN from Terraform output and that the IAM role trust policy allows your cluster’s OIDC provider. |

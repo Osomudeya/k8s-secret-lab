@@ -117,7 +117,8 @@ resource "aws_eks_cluster" "cluster" {
   count    = var.create_eks ? 1 : 0
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster[0].arn
-  version  = "1.28"
+  # One minor version at a time: if cluster is 1.28, set to 1.29 first, apply, then 1.30
+  version  = "1.29"
 
   vpc_config {
     subnet_ids             = aws_subnet.public[*].id
@@ -129,13 +130,14 @@ resource "aws_eks_cluster" "cluster" {
   ]
 }
 
-# 8. EKS node group
+# 8. EKS node group (use cluster version — AMIs for 1.28 are no longer supported in 2025)
 resource "aws_eks_node_group" "main" {
   count           = var.create_eks ? 1 : 0
   cluster_name    = aws_eks_cluster.cluster[0].name
   node_group_name = "k8s-secrets-lab-ng"
   node_role_arn   = aws_iam_role.eks_node[0].arn
   subnet_ids      = aws_subnet.public[*].id
+  ami_type        = "AL2023_x86_64_STANDARD"
 
   scaling_config {
     desired_size = 2

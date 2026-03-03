@@ -35,20 +35,18 @@ resource "aws_secretsmanager_secret_version" "app_db" {
 }
 
 # ------------------------------------------------------------------
-# Rotation configuration
-# Without rotation_lambda_arn AWS accepts this resource but rotation never
-# actually executes. For real rotation use the test-rotation.sh script
-# manually, or add a Lambda and set rotation_lambda_arn. This resource only
-# sets the schedule, not the mechanism.
+# Rotation configuration — DISABLED: AWS requires rotation_lambda_arn.
+# Without a Lambda, CreateSecretRotation fails with "No Lambda rotation
+# function ARN is associated with this secret". Use test-rotation.sh for
+# manual rotation; or add a Lambda and set count = var.use_eks ? 1 : 0.
 # ------------------------------------------------------------------
 resource "aws_secretsmanager_secret_rotation" "app_db" {
-  count     = var.use_eks ? 1 : 0 # Only configure rotation on real infra
+  count     = 0 # Set to (var.use_eks ? 1 : 0) only when rotation_lambda_arn is set
   secret_id = aws_secretsmanager_secret.app_db.id
 
   rotation_rules {
     automatically_after_days = 30
   }
 
-  # Required for rotation to actually run; not defined in this repo
   # rotation_lambda_arn = aws_lambda_function.rotation.arn
 }

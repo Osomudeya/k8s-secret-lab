@@ -16,6 +16,14 @@ output "eso_role_arn" {
   sensitive   = true
 }
 
+# Alias so "terraform output role_arn" works from this module (ESO role).
+# For the GitHub Actions OIDC role (AWS_ROLE_ARN secret), run: cd ../github-oidc && terraform output role_arn
+output "role_arn" {
+  description = "ESO IAM role ARN (same as eso_role_arn). For GitHub Actions OIDC role, use terraform/github-oidc and run: terraform output role_arn"
+  value       = aws_iam_role.eso_role.arn
+  sensitive   = true
+}
+
 output "random_password_value" {
   description = "Initial DB password (random). Retrieve with: terraform output -raw random_password_value"
   value       = random_password.db.result
