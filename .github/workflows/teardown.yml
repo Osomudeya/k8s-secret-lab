@@ -1,0 +1,80 @@
+# Teardown — Terraform destroy (AWS and optionally Azure).
+# Manual only: run from Actions tab when you want to tear down infra.
+# Does NOT delete the EKS/AKS cluster; it destroys Terraform-managed resources
+# (ESO Helm release, AWS Secrets Manager secret, IAM role, Azure Key Vault resources).
+name: Teardown
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  teardown-aws:
+    name: Terraform Destroy — AWS
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        working-directory: terraform/aws
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy -auto-approve \
+            -var="aws_region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
+            -var="use_eks=true"
+        env:
+          TF_IN_AUTOMATION: true
+
+  teardown-azure:
+    name: Terraform Destroy — Azure
+    runs-on: ubuntu-latest
+    environment: production
+    continue-on-error: true
+
+    defaults:
+      run:
+        working-directory: terraform/azure
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+        env:
+          TF_IN_AUTOMATION: true

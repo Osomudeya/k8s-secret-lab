@@ -1,0 +1,12 @@
+{
+  "name": "k8s-secrets-lab-app",
+  "version": "1.0.0",
+  "description": "Sample Node app for K8s Secrets Lab — reads secrets from env and volume mount",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "k8s-secrets-lab",
+  "version": "1.1.0",
+  "private": true,
+  "description": "K8s Secrets Lab — AWS SM + Azure KV + Terraform + Rotation + CI/CD",
+  "scripts": {
+    "dev": "npm run dev --prefix lab-ui",
+    "build": "npm run build --prefix lab-ui",
+    "preview": "npm run preview --prefix lab-ui",
+    "postinstall": "npm install --prefix lab-ui",
+    "build-push-app": "bash scripts/build-push-app.sh"
+  }
+}

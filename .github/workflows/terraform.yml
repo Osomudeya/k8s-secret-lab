@@ -1,0 +1,126 @@
+name: Terraform CI
+
+on:
+  workflow_dispatch:   # Manual: "Spin up" — run from Actions tab
+  pull_request:
+    paths:
+      - 'terraform/**'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+
+permissions:
+  id-token: write   # Required for OIDC
+  contents: read
+  pull-requests: write
+
+jobs:
+  terraform-aws:
+    name: Terraform Plan/Apply — AWS
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        working-directory: terraform/aws
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC authentication — no AWS access keys stored in GitHub!
+      # GitHub exchanges a short-lived OIDC token for AWS temporary credentials.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          # No AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY needed
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+          terraform_wrapper: true
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      # On PRs: show the plan as a comment — team reviews before merge
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan 2>&1 | tee plan.out
+        continue-on-error: true
+
+      - name: Comment Plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const planOutput = fs.existsSync('terraform/aws/plan.out') ? fs.readFileSync('terraform/aws/plan.out', 'utf8') : (steps.plan.outputs.stdout || 'Plan output not captured.');
+            const output = `#### Terraform Plan 📋
+            \`\`\`
+            ${planOutput}
+            \`\`\`
+            *Pushed by: @${{ github.actor }}*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      # On main push or manual run: apply only if plan succeeded
+      - name: Terraform Apply
+        if: steps.plan.outcome == 'success' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push'))
+        run: terraform apply -auto-approve tfplan
+
+  terraform-azure:
+    name: Terraform Plan/Apply — Azure
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        working-directory: terraform/azure
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+          terraform_wrapper: true
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan-azure
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Terraform Apply
+        if: steps.plan-azure.outcome == 'success' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push'))
+        run: terraform apply -auto-approve tfplan

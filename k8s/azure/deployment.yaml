@@ -1,0 +1,96 @@
+# Replace MANAGED_IDENTITY_CLIENT_ID with: terraform output managed_identity_client_id
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: myapp-sa
+  namespace: default
+  annotations:
+    # Workload identity — links this SA to the Azure Managed Identity
+    azure.workload.identity/client-id: "MANAGED_IDENTITY_CLIENT_ID"
+  labels:
+    azure.workload.identity/use: "true"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: myapp-sa  # Uses the annotated SA above
+
+      containers:
+        - name: myapp
+          # Replace YOUR_DOCKERHUB_USERNAME with the repo owner's username or your own if you push the image.
+          image: YOUR_DOCKERHUB_USERNAME/k8s-secrets-lab-app:latest
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 3000
+
+          # Env vars from the synced K8s Secret
+          envFrom:
+            - secretRef:
+                name: myapp-database-creds
+
+          # Volume mount — CSI Driver mounts secrets directly as files
+          # This path updates automatically when the Key Vault secret rotates
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /etc/secrets
+              readOnly: true
+
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: azure-kv-provider
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  selector:
+    app: myapp
+  ports:
+    - port: 80
+      targetPort: 3000
+  type: ClusterIP

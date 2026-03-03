@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Lab scripts state (contains AWS account ID, region, secret ARN, IAM role ARN)
+.lab-state
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+.terraform.tfstate.lock.info
+terraform/aws/terraform.tfstate
+terraform/azure/terraform.tfstate
+
+# Build / dist
+dist/
+build/
+*.local
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cursor
+.cursor/rules/codacy.mdc
+
+# Optional
+coverage/
+.nyc_output/
+*.tgz
