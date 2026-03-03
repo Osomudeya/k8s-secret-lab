@@ -105,17 +105,30 @@ jobs:
             --name ${{ env.EKS_CLUSTER_NAME }} \
             --region ${{ env.AWS_REGION }}
 
-      - name: Patch deployment with built image
+      - name: Skip if already running
+        run: |
+          if kubectl get deploy myapp -n default >/dev/null 2>&1; then
+            READY=$(kubectl get deploy myapp -n default -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "")
+            DESIRED=$(kubectl get deploy myapp -n default -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")
+            if [ -n "$READY" ] && [ -n "$DESIRED" ] && [ "$READY" = "$DESIRED" ] && [ "$READY" != "0" ]; then
+              echo "myapp already running ($READY/$DESIRED ready). Skipping deploy."
+              exit 0
+            fi
+          fi
+
+      - name: Apply Deployment
+        run: kubectl apply -f k8s/aws/deployment.yaml
+
+      - name: Set image (if built)
         run: |
           IMAGE="${{ needs.build-app.outputs.image }}"
-          sed -i.bak "s|image: [^ ]*/k8s-secrets-lab-app:[^ ]*|image: ${IMAGE}|" k8s/aws/deployment.yaml
+          if [ -n "$IMAGE" ]; then
+            kubectl set image deployment/myapp myapp="$IMAGE" -n default
+          fi
 
       - name: Apply ExternalSecret (only when k8s/** changed or manual — avoids unnecessary sync)
         if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.k8s == 'true'
         run: kubectl apply -f k8s/aws/external-secret.yaml
-
-      - name: Apply Deployment (always — uses patched image; when only app changed we skip ExternalSecret)
-        run: kubectl apply -f k8s/aws/deployment.yaml
 
       - name: Wait for rollout
         run: kubectl rollout status deployment/myapp --timeout=120s -n default
