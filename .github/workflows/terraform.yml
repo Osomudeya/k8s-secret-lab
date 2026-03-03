@@ -66,8 +66,11 @@ jobs:
             terraform init -backend=false
           fi
 
+      # Format is checked with Terraform 1.7 (above). Use same version locally to avoid drift.
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+        run: |
+          terraform fmt -recursive
+          git diff --exit-code .
 
       - name: Terraform Validate
         run: terraform validate

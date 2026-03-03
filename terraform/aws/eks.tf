@@ -118,7 +118,7 @@ resource "aws_eks_cluster" "cluster" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster[0].arn
   # One minor version at a time: if cluster is 1.28, set to 1.29 first, apply, then 1.30
-  version = "1.29"
+  version  = "1.29"
 
   vpc_config {
     subnet_ids             = aws_subnet.public[*].id
