@@ -22,7 +22,6 @@ jobs:
     name: Terraform Plan/Apply — AWS
     runs-on: ubuntu-latest
     environment: production
-
     defaults:
       run:
         working-directory: terraform/aws
@@ -30,37 +29,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Terraform providers
+      - name: Cache Terraform
         uses: actions/cache@v4
         with:
           path: terraform/aws/.terraform
           key: terraform-${{ hashFiles('terraform/aws/.terraform.lock.hcl') }}
           restore-keys: terraform-
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
-      # Get kubeconfig BEFORE Terraform runs — the Helm and kubectl providers
-      # need cluster access during plan/apply. OIDC auth gives AWS permissions;
-      # the access entry (bootstrap step) lets the role actually call the cluster.
-      - name: Get kubeconfig for EKS
+      - name: EKS kubeconfig and vars
         env:
           EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
           AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
         run: |
           if [ -n "$EKS_CLUSTER_NAME" ]; then
             aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
-          fi
-
-      - name: Set EKS Terraform vars
-        env:
-          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-        run: |
-          if [ -n "$EKS_CLUSTER_NAME" ]; then
             echo "TF_VAR_create_eks=true" >> $GITHUB_ENV
             echo "TF_VAR_use_eks=true" >> $GITHUB_ENV
             echo "TF_VAR_cluster_name=$EKS_CLUSTER_NAME" >> $GITHUB_ENV
@@ -73,8 +62,6 @@ jobs:
           terraform_version: "1.7.0"
           terraform_wrapper: true
 
-      # S3 backend — bucket created by spinup.sh and set as GitHub secrets.
-      # If TF_BACKEND_BUCKET is not set, init runs without backend (local state).
       - name: Terraform Init
         env:
           TF_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
@@ -82,30 +69,12 @@ jobs:
           TF_DYNAMO: ${{ secrets.TF_BACKEND_DYNAMO || 'k8s-secrets-lab-tflock' }}
         run: |
           if [ -n "$TF_BUCKET" ]; then
-            terraform init \
-              -backend-config="bucket=${TF_BUCKET}" \
-              -backend-config="key=k8s-secrets-lab/terraform.tfstate" \
-              -backend-config="region=${TF_REGION}" \
-              -backend-config="dynamodb_table=${TF_DYNAMO}" \
-              -backend-config="encrypt=true"
+            terraform init -backend-config="bucket=$TF_BUCKET" -backend-config="key=k8s-secrets-lab/terraform.tfstate" -backend-config="region=$TF_REGION" -backend-config="dynamodb_table=$TF_DYNAMO" -backend-config="encrypt=true"
           else
-            echo "⚠ TF_BACKEND_BUCKET not set — using local state (run spinup.sh to configure backend)"
             terraform init -backend=false
           fi
 
-      - name: Bootstrap EKS access for CI
-        env:
-          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-        run: |
-          if [ -n "$EKS_CLUSTER_NAME" ]; then
-            terraform plan -input=false -no-color \
-              -target=aws_eks_access_entry.github_actions \
-              -target=aws_eks_access_policy_association.github_actions_admin \
-              -out=tfplan.bootstrap
-            terraform apply -input=false -auto-approve tfplan.bootstrap
-          fi
-
-      - name: Terraform Format Check
+      - name: Terraform Format
         run: terraform fmt -check -recursive
 
       - name: Terraform Validate
@@ -116,7 +85,7 @@ jobs:
         run: terraform plan -no-color -out=tfplan 2>&1 | tee plan.out
         continue-on-error: true
 
-      - name: Upload plan artifact
+      - name: Upload plan
         if: steps.plan.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -129,83 +98,10 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const planOutput = fs.existsSync('terraform/aws/plan.out')
-              ? fs.readFileSync('terraform/aws/plan.out', 'utf8')
-              : 'Plan output not captured.';
-            // Truncate if over 60k chars (GitHub comment limit)
-            const truncated = planOutput.length > 60000
-              ? planOutput.slice(0, 60000) + '\n... (truncated)'
-              : planOutput;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `#### Terraform Plan 📋\n\`\`\`\n${truncated}\n\`\`\`\n*Pushed by: @${{ github.actor }}*`
-            });
+            const out = fs.existsSync('terraform/aws/plan.out') ? fs.readFileSync('terraform/aws/plan.out', 'utf8') : 'No plan output.';
+            const body = `#### Terraform Plan\n\`\`\`\n${out.length > 60000 ? out.slice(0,60000) + '\n...(truncated)' : out}\n\`\`\``;
+            github.rest.issues.createComment({ issue_number: context.issue.number, owner: context.repo.owner, repo: context.repo.repo, body });
 
-      # Apply only when plan succeeded AND we are on main or manual run
       - name: Terraform Apply
-        if: >
-          steps.plan.outcome == 'success' &&
-          (github.event_name == 'workflow_dispatch' ||
-           (github.ref == 'refs/heads/main' && github.event_name == 'push'))
+        if: steps.plan.outcome == 'success' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push'))
         run: terraform apply -auto-approve tfplan
-
-      - name: Write job summary
-        if: always()
-        run: |
-          echo "## Terraform CI Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Step | Result |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Plan | ${{ steps.plan.outcome }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Cluster: \`${{ secrets.EKS_CLUSTER_NAME }}\`  Region: \`${{ secrets.AWS_REGION || 'us-east-1' }}\`" >> $GITHUB_STEP_SUMMARY
-
-  # Azure — commented out. Uncomment and add AZURE_* secrets to production
-  # environment when ready. Add continue-on-error: true to avoid blocking
-  # the AWS job if Azure credentials are missing.
-  #
-  # terraform-azure:
-  #   name: Terraform Plan/Apply — Azure
-  #   runs-on: ubuntu-latest
-  #   environment: production
-  #   continue-on-error: true
-  #
-  #   defaults:
-  #     run:
-  #       working-directory: terraform/azure
-  #
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Azure Login (OIDC)
-  #       uses: azure/login@v2
-  #       with:
-  #         client-id: ${{ secrets.AZURE_CLIENT_ID }}
-  #         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-  #         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  #
-  #     - name: Setup Terraform
-  #       uses: hashicorp/setup-terraform@v3
-  #       with:
-  #         terraform_version: "1.7.0"
-  #         terraform_wrapper: true
-  #
-  #     - name: Terraform Init
-  #       run: terraform init
-  #
-  #     - name: Terraform Format Check
-  #       run: terraform fmt -check -recursive
-  #
-  #     - name: Terraform Validate
-  #       run: terraform validate
-  #
-  #     - name: Terraform Plan
-  #       id: plan-azure
-  #       run: terraform plan -no-color -out=tfplan
-  #       continue-on-error: true
-  #
-  #     - name: Terraform Apply
-  #       if: steps.plan-azure.outcome == 'success' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push'))
-  #       run: terraform apply -auto-approve tfplan
