@@ -11,6 +11,7 @@ on:
     paths:
       - 'k8s/**'
       - 'app/**'
+      - '.github/workflows/deploy.yml'
 
 permissions:
   id-token: write
