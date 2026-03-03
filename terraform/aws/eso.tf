@@ -28,6 +28,12 @@ resource "helm_release" "external_secrets" {
   # Wait for all pods to be ready before continuing
   wait    = true
   timeout = 300
+
+  # When using EKS in CI, GitHub Actions role must have cluster access before Helm can run
+  depends_on = [
+    aws_eks_access_entry.github_actions,
+    aws_eks_access_policy_association.github_actions_admin
+  ]
 }
 
 # ESO CRDs need time to register after Helm install. Without this sleep, the

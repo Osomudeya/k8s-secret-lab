@@ -166,3 +166,21 @@ resource "aws_iam_openid_connect_provider" "eks_oidc" {
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.cluster[0].certificates[0].sha1_fingerprint]
 }
+
+# Grant GitHub Actions role access to the cluster so Terraform Helm provider can run in CI
+resource "aws_eks_access_entry" "github_actions" {
+  count        = var.create_eks && var.github_actions_role_arn != "" ? 1 : 0
+  cluster_name = aws_eks_cluster.cluster[0].name
+  principal_arn = var.github_actions_role_arn
+  type         = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "github_actions_admin" {
+  count        = var.create_eks && var.github_actions_role_arn != "" ? 1 : 0
+  cluster_name = aws_eks_cluster.cluster[0].name
+  principal_arn = var.github_actions_role_arn
+  policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  access_scope {
+    type = "cluster"
+  }
+}

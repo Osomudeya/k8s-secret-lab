@@ -45,3 +45,9 @@ variable "secret_name" {
   type        = string
   default     = "prod/myapp/database"
 }
+
+variable "github_actions_role_arn" {
+  description = "IAM role ARN for GitHub Actions (OIDC). When set with create_eks = true, grants this role cluster access so Terraform/Helm can run in CI."
+  type        = string
+  default     = ""
+}

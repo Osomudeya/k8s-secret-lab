@@ -82,9 +82,11 @@ jobs:
             echo "TF_VAR_create_eks=true" >> $GITHUB_ENV
             echo "TF_VAR_use_eks=true" >> $GITHUB_ENV
             echo "TF_VAR_cluster_name=$EKS_CLUSTER_NAME" >> $GITHUB_ENV
+            [ -n "$AWS_ROLE_ARN" ] && echo "TF_VAR_github_actions_role_arn=$AWS_ROLE_ARN" >> $GITHUB_ENV
           fi
         env:
           EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
       # Helm/kubectl providers need kubeconfig when use_eks = true
       - name: Configure kubeconfig for EKS

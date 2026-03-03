@@ -151,7 +151,14 @@ data "aws_iam_policy_document" "github_actions" {
       "eks:DescribeCluster",
       "eks:DescribeNodegroup",
       "eks:ListNodegroups",
-      "eks:ListClusters"
+      "eks:ListClusters",
+      "eks:CreateAccessEntry",
+      "eks:DeleteAccessEntry",
+      "eks:DescribeAccessEntry",
+      "eks:ListAccessEntries",
+      "eks:AssociateAccessPolicy",
+      "eks:DisassociateAccessPolicy",
+      "eks:ListAssociatedAccessPolicies"
     ]
     resources = ["*"]
   }
