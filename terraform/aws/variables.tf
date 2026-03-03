@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "create_eks" {
+  description = "Set true to create EKS cluster and VPC. False = cluster already exists or using local (kind/MicroK8s)."
+  type        = bool
+  default     = false
+}
+
 variable "cluster_name" {
   description = "EKS cluster name (leave blank if using kind locally)"
   type        = string

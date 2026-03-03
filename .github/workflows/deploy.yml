@@ -1,15 +1,11 @@
 # Deploy K8s Manifests — builds app image, pushes to Docker Hub, deploys to cluster.
-# Triggers: (1) After Terraform CI completes successfully on main, or (2) push to k8s/app, or (3) manual.
-# Targets EKS (aws eks update-kubeconfig). For kind/MicroK8s use spinup.sh (DEPLOY.md).
+# Triggers: push to k8s/** or app/**, or manual workflow_dispatch.
+# Targets EKS. Set AWS_REGION (and optionally EKS_CLUSTER_NAME) in repo secrets.
+# For kind/MicroK8s use spinup.sh (DEPLOY.md).
 name: Deploy K8s Manifests
 
 on:
-  workflow_dispatch:   # Manual: run from Actions tab
-  workflow_run:
-    workflows: ["Terraform CI"]
-    types: [completed]
-    branches: [main]
-    # Only run deploy when Terraform succeeded (so infra is ready)
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -20,19 +16,39 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME || 'secrets-lab' }}
+
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      k8s: ${{ steps.filter.outputs.k8s }}
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            k8s:
+              - 'k8s/**'
+            app:
+              - 'app/**'
+
   build-app:
     name: Build and push app image
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: changes
+    if: always() && (needs.changes.result == 'success' && (needs.changes.outputs.app == 'true' || needs.changes.outputs.k8s == 'true') || github.event_name == 'workflow_dispatch')
     permissions:
       contents: read
     outputs:
       image: ${{ steps.set-image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -65,20 +81,18 @@ jobs:
   deploy-aws:
     name: Deploy to K8s (AWS path)
     runs-on: ubuntu-latest
-    needs: build-app
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: [changes, build-app]
+    if: always() && needs.build-app.result == 'success'
     environment: production
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
@@ -88,77 +102,123 @@ jobs:
       - name: Get kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
-            --name secrets-lab \
-            --region us-east-1
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
 
-      - name: Apply K8s manifests
+      - name: Patch deployment with built image
         run: |
-          kubectl apply -f k8s/aws/external-secret.yaml
-          kubectl apply -f k8s/aws/deployment.yaml
+          IMAGE="${{ needs.build-app.outputs.image }}"
+          sed -i.bak "s|image: [^ ]*/k8s-secrets-lab-app:[^ ]*|image: ${IMAGE}|" k8s/aws/deployment.yaml
 
-      - name: Use built app image and wait for rollout
-        run: |
-          kubectl set image deployment/myapp myapp=${{ needs.build-app.outputs.image }} -n default
-          kubectl rollout status deployment/myapp --timeout=120s -n default
+      - name: Apply ExternalSecret (only when k8s/** changed or manual — avoids unnecessary sync)
+        if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.k8s == 'true'
+        run: kubectl apply -f k8s/aws/external-secret.yaml
+
+      - name: Apply Deployment (always — uses patched image; when only app changed we skip ExternalSecret)
+        run: kubectl apply -f k8s/aws/deployment.yaml
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/myapp --timeout=120s -n default
 
       - name: Verify secrets synced
         run: |
           echo "ExternalSecret status:"
           kubectl get externalsecret app-db-secret -n default \
             -o jsonpath='{.status.conditions[0].message}'
-
           echo ""
           echo "K8s Secret exists:"
           kubectl get secret myapp-database-creds -n default
 
-          echo ""
-          echo "Pod env check:"
-          POD=$(kubectl get pod -l app=myapp -n default -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec $POD -n default -- sh -c 'echo "DB_USERNAME=$DB_USERNAME"'
-          # Never print DB_PASSWORD in CI logs!
-          kubectl exec $POD -n default -- sh -c '[ -n "$DB_PASSWORD" ] && echo "DB_PASSWORD=****SET****" || echo "DB_PASSWORD=(not set)"'
-
-  deploy-azure:
-    name: Deploy to K8s (Azure path)
-    runs-on: ubuntu-latest
-    needs: build-app
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    environment: production
-    continue-on-error: true
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: 'v1.28.0'
-
-      - name: Get AKS credentials
+      - name: Verify via app endpoint (ALB or LB)
         env:
-          AKS_RG: ${{ secrets.AZURE_AKS_RG }}
-          AKS_NAME: ${{ secrets.AZURE_AKS_NAME }}
+          ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          az aks get-credentials \
-            --resource-group "${AKS_RG:-k8s-secrets-lab-rg}" \
-            --name "${AKS_NAME:-secrets-lab-aks}" \
-            --overwrite-existing
+          APP_URL=""
+          if [ -n "${ALB_URL}" ]; then
+            APP_URL="${ALB_URL}"
+            echo "Using ALB_URL from secrets"
+          else
+            LB_HOST=$(kubectl get svc myapp -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+            LB_IP=$(kubectl get svc myapp -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+            if [ -n "$LB_HOST" ]; then
+              APP_URL="http://${LB_HOST}"
+            elif [ -n "$LB_IP" ]; then
+              APP_URL="http://${LB_IP}"
+            fi
+          fi
+          if [ -n "$APP_URL" ]; then
+            echo "Checking /secrets/compare..."
+            RESULT=$(curl -sf --connect-timeout 10 "${APP_URL}/secrets/compare" || echo '{"all_match":null}')
+            echo "$RESULT" | python3 -m json.tool 2>/dev/null || echo "$RESULT"
+            echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0) if d.get('all_match') is not False else (print('WARNING: env/volume mismatch — rotation may be in progress'), exit(0))"
+          else
+            echo "No ALB/LB address yet — verifying via kubectl exec"
+            POD=$(kubectl get pod -l app=myapp -n default -o jsonpath='{.items[0].metadata.name}')
+            kubectl exec $POD -n default -- sh -c 'echo "DB_USERNAME=$DB_USERNAME"; [ -n "$DB_PASSWORD" ] && echo "DB_PASSWORD=****SET****" || echo "DB_PASSWORD=(not set)"'
+          fi
 
-      - name: Apply K8s manifests (Azure)
+      - name: Write deploy summary
         run: |
-          kubectl apply -f k8s/azure/secret-provider-class.yaml
-          kubectl apply -f k8s/azure/deployment.yaml
+          echo "## Deploy summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ needs.build-app.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
+          LB_HOST=$(kubectl get svc myapp -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+          LB_IP=$(kubectl get svc myapp -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+          if [ -n "$LB_HOST" ]; then
+            echo "| **App URL** | http://$LB_HOST |" >> $GITHUB_STEP_SUMMARY
+          elif [ -n "$LB_IP" ]; then
+            echo "| **App URL** | http://$LB_IP |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| **App URL** | *(pending or use port-forward)* |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| **Cluster** | ${{ env.EKS_CLUSTER_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Set \`ALB_URL\` in repo secrets to pin the verify step to your LoadBalancer URL." >> $GITHUB_STEP_SUMMARY
 
-      - name: Use built app image and wait for rollout
-        run: |
-          kubectl set image deployment/myapp myapp=${{ needs.build-app.outputs.image }} -n default
-          kubectl rollout status deployment/myapp --timeout=120s -n default
+  # Azure — commented out; uncomment when ready to run Azure path
+  # deploy-azure:
+  #   name: Deploy to K8s (Azure path)
+  #   runs-on: ubuntu-latest
+  #   needs: build-app
+  #   if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+  #   environment: production
+  #   continue-on-error: true
+  #
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+  #
+  #     - name: Azure Login (OIDC)
+  #       uses: azure/login@v2
+  #       with:
+  #         client-id: ${{ secrets.AZURE_CLIENT_ID }}
+  #         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+  #         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  #
+  #     - name: Install kubectl
+  #       uses: azure/setup-kubectl@v4
+  #       with:
+  #         version: 'v1.28.0'
+  #
+  #     - name: Get AKS credentials
+  #       env:
+  #         AKS_RG: ${{ secrets.AZURE_AKS_RG }}
+  #         AKS_NAME: ${{ secrets.AZURE_AKS_NAME }}
+  #       run: |
+  #         az aks get-credentials \
+  #           --resource-group "${AKS_RG:-k8s-secrets-lab-rg}" \
+  #           --name "${AKS_NAME:-secrets-lab-aks}" \
+  #           --overwrite-existing
+  #
+  #     - name: Apply K8s manifests (Azure)
+  #       run: |
+  #         kubectl apply -f k8s/azure/secret-provider-class.yaml
+  #         kubectl apply -f k8s/azure/deployment.yaml
+  #
+  #     - name: Use built app image and wait for rollout
+  #       run: |
+  #         kubectl set image deployment/myapp myapp=${{ needs.build-app.outputs.image }} -n default
+  #         kubectl rollout status deployment/myapp --timeout=120s -n default

@@ -36,3 +36,13 @@ output "next_steps" {
     kubectl exec deploy/myapp -- env | grep DB_
   EOT
 }
+
+output "eks_cluster_name" {
+  description = "EKS cluster name (set when create_eks = true)"
+  value       = var.create_eks ? aws_eks_cluster.cluster[0].name : ""
+}
+
+output "eks_cluster_endpoint" {
+  description = "EKS cluster API endpoint (set when create_eks = true)"
+  value       = var.create_eks ? aws_eks_cluster.cluster[0].endpoint : ""
+}

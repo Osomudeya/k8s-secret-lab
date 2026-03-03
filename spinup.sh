@@ -5,7 +5,7 @@
 # What this does (in order):
 #   1.  Checks prerequisites (aws, terraform, kubectl, helm)
 #   2.  Validates AWS credentials
-#   3.  Detects or creates your cluster (kind / MicroK8s / EKS)
+#   3.  Asks you to choose cluster: EKS or MicroK8s
 #   4.  Sets kubeconfig + context correctly for each cluster type
 #   5.  Enables required MicroK8s addons (dns, storage) if needed
 #   6.  Creates S3 bucket + DynamoDB table for Terraform remote state
@@ -20,7 +20,6 @@
 #
 # Usage:
 #   bash spinup.sh                       # auto-detect everything
-#   bash spinup.sh --cluster kind        # force kind
 #   bash spinup.sh --cluster microk8s    # force MicroK8s
 #   bash spinup.sh --cluster eks         # force EKS (set EKS_CLUSTER_NAME)
 #   bash spinup.sh --region eu-west-1    # override AWS region
@@ -30,8 +29,7 @@
 #
 # Environment variables (all optional):
 #   AWS_REGION          override region (default: us-east-1)
-#   KIND_CLUSTER_NAME   override kind cluster name (default: secrets-lab)
-#   EKS_CLUSTER_NAME    required when --cluster eks (default: secrets-lab)
+#   EKS_CLUSTER_NAME    when --cluster eks (default: secrets-lab)
 # =============================================================================
 
 set -euo pipefail
@@ -70,8 +68,9 @@ USE_BACKEND=true
 DRY_RUN=false
 SKIP_CLUSTER=false
 AWS_REGION="${AWS_REGION:-us-east-1}"
-KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-secrets-lab}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-secrets-lab}"
+CREATE_EKS="false"
+USE_EKS="false"
 KUBECONFIG_PATH=""
 CLUSTER_CONTEXT=""
 
@@ -119,8 +118,9 @@ check_cmd aws       "Install: https://docs.aws.amazon.com/cli/latest/userguide/i
 check_cmd terraform "Install: https://developer.hashicorp.com/terraform/install"
 check_cmd kubectl   "Install: https://kubernetes.io/docs/tasks/tools/"
 check_cmd helm      "Install: https://helm.sh/docs/intro/install/"
-command -v kind     &>/dev/null && ok "kind     → $(command -v kind)"     || warn "kind not installed (only needed for kind clusters)"
 command -v microk8s &>/dev/null && ok "microk8s → $(command -v microk8s)" || warn "microk8s not installed (only needed for MicroK8s clusters)"
+# gh CLI required if you want spinup to set GitHub Actions secrets (TF_BACKEND_*, EKS_CLUSTER_NAME, AWS_REGION)
+command -v gh &>/dev/null && ok "gh       → $(command -v gh)" || warn "gh CLI not installed (optional: run 'brew install gh' or see https://cli.github.com/ — needed to auto-set GitHub Actions secrets for CI)"
 
 # =============================================================================
 # STEP 2 — AWS credentials
@@ -136,132 +136,90 @@ ok "Account  : $AWS_ACCOUNT"
 ok "Identity : $AWS_USER"
 
 # =============================================================================
-# STEP 3 — Cluster setup
+# STEP 3 — Cluster choice (EKS or MicroK8s)
 # =============================================================================
 step "Step 3/13 — Kubernetes cluster"
 
-# ── Auto-detect ───────────────────────────────────────────────────────────────
-detect_cluster() {
-  [[ -n "$CLUSTER_TYPE" ]] && { echo "$CLUSTER_TYPE"; return; }
+if [[ -z "$CLUSTER_TYPE" ]]; then
+  echo ""
+  echo "  Choose your cluster:"
+  echo "  1) EKS (production-like, ~\$0.16/hr, 15-20 min setup)"
+  echo "  2) MicroK8s (local, free, 5 min setup)"
+  echo ""
+  read -r -p "  Enter 1 or 2: " choice
+  case "$choice" in
+    1|eks)      CLUSTER_TYPE="eks" ;;
+    2|microk8s) CLUSTER_TYPE="microk8s" ;;
+    *)          die "Invalid choice. Enter 1 (EKS) or 2 (MicroK8s)." ;;
+  esac
+fi
 
-  if command -v kind &>/dev/null; then
-    local clusters
-    clusters=$(kind get clusters 2>/dev/null || true)
-    if echo "$clusters" | grep -q "^${KIND_CLUSTER_NAME}$"; then
-      echo "kind"; return
-    elif [[ -n "$clusters" ]]; then
-      KIND_CLUSTER_NAME=$(echo "$clusters" | head -1)
-      echo "kind"; return
-    fi
-    echo "kind-create"; return
-  fi
-
-  if command -v microk8s &>/dev/null; then
-    microk8s status 2>/dev/null | grep -q "microk8s is running" \
-      && { echo "microk8s"; return; }
-    die "microk8s installed but not running — run: microk8s start"
-  fi
-
-  local ctx
-  ctx=$(kubectl config current-context 2>/dev/null || true)
-  [[ "$ctx" == *"eks"* || "$ctx" == *"EKS"* ]] && { echo "eks"; return; }
-
-  kubectl cluster-info &>/dev/null 2>&1 && { echo "generic"; return; }
-
-  echo "none"
-}
-
-[[ "$SKIP_CLUSTER" == "true" ]] && CLUSTER_TYPE="generic"
-CLUSTER_TYPE=$(detect_cluster)
-log "Cluster type: $CLUSTER_TYPE"
-
-# ── kind ──────────────────────────────────────────────────────────────────────
-setup_kind() {
-  KUBECONFIG_PATH="$HOME/.kube/config"
-  CLUSTER_CONTEXT="kind-${KIND_CLUSTER_NAME}"
-
-  if kind get clusters 2>/dev/null | grep -q "^${KIND_CLUSTER_NAME}$"; then
-    ok "kind cluster '$KIND_CLUSTER_NAME' already exists"
-  else
-    log "Creating kind cluster '$KIND_CLUSTER_NAME' (this takes ~30s)..."
-    kind create cluster --name "$KIND_CLUSTER_NAME" --wait 90s \
-      || die "Failed to create kind cluster"
-    ok "kind cluster created"
-  fi
-
-  kubectl config use-context "kind-${KIND_CLUSTER_NAME}" \
-    || die "Failed to switch context to kind-${KIND_CLUSTER_NAME}"
-  ok "kubectl context → kind-${KIND_CLUSTER_NAME}"
-}
-
-# ── MicroK8s ──────────────────────────────────────────────────────────────────
-setup_microk8s() {
-  KUBECONFIG_PATH="$HOME/.kube/config-microk8s"
-  CLUSTER_CONTEXT="microk8s"
-
-  log "Exporting MicroK8s kubeconfig → $KUBECONFIG_PATH"
-  microk8s config > "$KUBECONFIG_PATH" \
-    || die "Failed to export MicroK8s kubeconfig — try: microk8s config"
-  chmod 600 "$KUBECONFIG_PATH"
-  export KUBECONFIG="$KUBECONFIG_PATH"
-  ok "KUBECONFIG=$KUBECONFIG_PATH"
-
-  # dns  — ESO needs DNS to reach AWS endpoints
-  # storage — volume mounts need a StorageClass
-  local required_addons=("dns" "storage")
-  for addon in "${required_addons[@]}"; do
-    if microk8s status 2>/dev/null | grep -E "^\s+${addon}" | grep -q "enabled"; then
-      ok "Addon already enabled: $addon"
-    else
-      log "Enabling MicroK8s addon: $addon"
-      microk8s enable "$addon" \
-        || die "Failed to enable MicroK8s addon '$addon'. Check: microk8s status"
-      ok "Addon enabled: $addon"
-    fi
-  done
-
-  log "Waiting for MicroK8s to be fully ready..."
-  microk8s status --wait-ready --timeout 60 \
-    || die "MicroK8s not ready after 60s"
-  ok "MicroK8s ready"
-}
-
-# ── EKS ───────────────────────────────────────────────────────────────────────
-setup_eks() {
-  KUBECONFIG_PATH="$HOME/.kube/config"
-  log "Fetching EKS kubeconfig: cluster=$EKS_CLUSTER_NAME  region=$AWS_REGION"
-  aws eks update-kubeconfig \
-    --name  "$EKS_CLUSTER_NAME" \
-    --region "$AWS_REGION" \
-    || die "Failed to get EKS kubeconfig.\n  Check EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME and region=$AWS_REGION"
-  CLUSTER_CONTEXT=$(kubectl config current-context)
-  ok "EKS context: $CLUSTER_CONTEXT"
-}
-
-# ── Generic ───────────────────────────────────────────────────────────────────
-setup_generic() {
-  KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/config}"
-  CLUSTER_CONTEXT=$(kubectl config current-context 2>/dev/null || true)
-  warn "Using existing kubeconfig  : $KUBECONFIG_PATH"
-  warn "Using existing context     : $CLUSTER_CONTEXT"
-}
-
+# Normalize --cluster flag
 case "$CLUSTER_TYPE" in
-  kind|kind-create) setup_kind     ;;
-  microk8s)         setup_microk8s ;;
-  eks)              setup_eks      ;;
-  generic)          setup_generic  ;;
-  none) die "No cluster found and nothing to create.\n  Install kind:     brew install kind\n  Install MicroK8s: sudo snap install microk8s --classic\n  Then re-run." ;;
-  *)    die "Unknown cluster type: $CLUSTER_TYPE" ;;
+  1|eks)       CLUSTER_TYPE="eks" ;;
+  2|microk8s)  CLUSTER_TYPE="microk8s" ;;
 esac
 
-# Expand ~ so Terraform providers can use the path directly
-KUBECONFIG_ABS="${KUBECONFIG_PATH/#\~/$HOME}"
+[[ "$CLUSTER_TYPE" != "eks" && "$CLUSTER_TYPE" != "microk8s" ]] && \
+  die "Cluster must be 'eks' or 'microk8s'. Got: $CLUSTER_TYPE"
 
-log "Verifying cluster connectivity..."
-kubectl cluster-info 2>/dev/null | head -1 \
-  || die "Cannot reach cluster. Kubeconfig: $KUBECONFIG_ABS"
-ok "Cluster reachable"
+log "Cluster type: $CLUSTER_TYPE"
+
+if [[ "$CLUSTER_TYPE" == "eks" ]]; then
+  CREATE_EKS="true"
+  USE_EKS="true"
+  warn "EKS costs ~\$0.16/hr. Run teardown.sh when done to avoid charges."
+  read -r -p "EKS cluster name (default: secrets-lab): " input_name
+  EKS_CLUSTER_NAME="${input_name:-secrets-lab}"
+  log "EKS cluster name: $EKS_CLUSTER_NAME (Terraform will create it)"
+  # Kubeconfig set after terraform apply
+  KUBECONFIG_PATH=""
+  CLUSTER_CONTEXT=""
+else
+  CREATE_EKS="false"
+  USE_EKS="false"
+  # ── MicroK8s ─────────────────────────────────────────────────────────────
+  setup_microk8s() {
+    KUBECONFIG_PATH="$HOME/.kube/config-microk8s"
+    CLUSTER_CONTEXT="microk8s"
+
+    log "Exporting MicroK8s kubeconfig → $KUBECONFIG_PATH"
+    microk8s config > "$KUBECONFIG_PATH" \
+      || die "Failed to export MicroK8s kubeconfig — try: microk8s config"
+    chmod 600 "$KUBECONFIG_PATH"
+    export KUBECONFIG="$KUBECONFIG_PATH"
+    ok "KUBECONFIG=$KUBECONFIG_PATH"
+
+    local required_addons=("dns" "storage")
+    for addon in "${required_addons[@]}"; do
+      if microk8s status 2>/dev/null | grep -E "^\s+${addon}" | grep -q "enabled"; then
+        ok "Addon already enabled: $addon"
+      else
+        log "Enabling MicroK8s addon: $addon"
+        microk8s enable "$addon" \
+          || die "Failed to enable MicroK8s addon '$addon'. Check: microk8s status"
+        ok "Addon enabled: $addon"
+      fi
+    done
+
+    log "Waiting for MicroK8s to be fully ready..."
+    microk8s status --wait-ready --timeout 60 \
+      || die "MicroK8s not ready after 60s"
+    ok "MicroK8s ready"
+  }
+  setup_microk8s
+fi
+
+# Expand ~ so Terraform providers can use the path directly (MicroK8s only; EKS set after apply)
+if [[ -n "$KUBECONFIG_PATH" ]]; then
+  KUBECONFIG_ABS="${KUBECONFIG_PATH/#\~/$HOME}"
+  log "Verifying cluster connectivity..."
+  kubectl cluster-info 2>/dev/null | head -1 \
+    || die "Cannot reach cluster. Kubeconfig: $KUBECONFIG_ABS"
+  ok "Cluster reachable"
+else
+  KUBECONFIG_ABS=""
+fi
 
 # =============================================================================
 # STEP 4 — S3 backend + DynamoDB
@@ -328,22 +286,7 @@ create_s3_backend() {
     ok "DynamoDB lock table active: $DYNAMO_TABLE"
   fi
 
-  # ── Write backend.tf ──────────────────────────────────────────────────────────
-  cat > "$BACKEND_TF" <<BACKEND
-# Auto-generated by spinup.sh — $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Do not edit manually. Regenerated on every spinup.sh run.
-# To switch to local state: delete this file then: terraform init -migrate-state
-terraform {
-  backend "s3" {
-    bucket         = "$BUCKET_NAME"
-    key            = "k8s-secrets-lab/terraform.tfstate"
-    region         = "$AWS_REGION"
-    dynamodb_table = "$DYNAMO_TABLE"
-    encrypt        = true
-  }
-}
-BACKEND
-  ok "backend.tf written → $BACKEND_TF"
+  ok "S3 backend will be used (bucket: $BUCKET_NAME)"
 }
 
 if [[ "$USE_BACKEND" == "true" ]]; then
@@ -351,7 +294,6 @@ if [[ "$USE_BACKEND" == "true" ]]; then
 else
   warn "--no-backend: using local state in terraform/aws/terraform.tfstate"
   warn "Do NOT commit terraform.tfstate — it contains AWS account IDs and secret ARNs."
-  [[ -f "$BACKEND_TF" ]] && { rm "$BACKEND_TF"; warn "Removed stale backend.tf (switching to local state)"; }
   BUCKET_NAME="local"
   DYNAMO_TABLE="local"
 fi
@@ -364,8 +306,18 @@ step "Step 5/13 — Terraform init"
 cd "$TF_DIR"
 
 log "Running terraform init..."
-terraform init -input=false -upgrade 2>&1 \
-  | grep -E "Initializing|Upgrading|installed|reusing|error|Error|backend" || true
+if [[ "$USE_BACKEND" == "true" && -n "$BUCKET_NAME" && "$BUCKET_NAME" != "local" ]]; then
+  terraform init -input=false -upgrade \
+    -backend-config=bucket="$BUCKET_NAME" \
+    -backend-config=key=k8s-secrets-lab/terraform.tfstate \
+    -backend-config=region="$AWS_REGION" \
+    -backend-config=dynamodb_table="$DYNAMO_TABLE" \
+    -backend-config=encrypt=true \
+    2>&1 | grep -E "Initializing|Upgrading|installed|reusing|error|Error|backend|Successfully" || true
+else
+  terraform init -input=false -upgrade 2>&1 \
+    | grep -E "Initializing|Upgrading|installed|reusing|error|Error|backend" || true
+fi
 ok "Terraform initialised"
 
 # =============================================================================
@@ -375,11 +327,11 @@ step "Step 6/13 — Terraform variables"
 
 TF_VARS=()
 TF_VARS+=("-var=aws_region=${AWS_REGION}")
+TF_VARS+=("-var=create_eks=${CREATE_EKS}")
+TF_VARS+=("-var=use_eks=${USE_EKS}")
+TF_VARS+=("-var=cluster_name=${EKS_CLUSTER_NAME}")
 
-# Pass kubeconfig + context so Helm/kubectl providers target the right cluster.
-# These vars (kubeconfig_path, cluster_context) should exist in variables.tf
-# from the Cursor fix pass. If they don't exist yet Terraform will warn but
-# won't fail — the providers will fall back to default kubeconfig.
+# Pass kubeconfig + context for MicroK8s so Helm/kubectl providers target the cluster.
 [[ -n "$KUBECONFIG_ABS" ]] && {
   TF_VARS+=("-var=kubeconfig_path=${KUBECONFIG_ABS}")
   log "kubeconfig_path → $KUBECONFIG_ABS"
@@ -390,12 +342,9 @@ TF_VARS+=("-var=aws_region=${AWS_REGION}")
 }
 
 if [[ "$CLUSTER_TYPE" == "eks" ]]; then
-  TF_VARS+=("-var=use_eks=true")
-  TF_VARS+=("-var=cluster_name=${EKS_CLUSTER_NAME}")
-  log "use_eks → true"
+  log "create_eks → true, use_eks → true, cluster_name → $EKS_CLUSTER_NAME"
 else
-  TF_VARS+=("-var=use_eks=false")
-  log "use_eks → false (static auth will be configured for ESO)"
+  log "create_eks → false, use_eks → false (static auth will be configured for ESO)"
 fi
 
 # =============================================================================
@@ -441,7 +390,7 @@ ok "Plan complete"
 # =============================================================================
 step "Step 8/13 — Terraform apply"
 
-log "Applying infrastructure (~3-5 min for ESO Helm install)..."
+log "Applying infrastructure (~3-5 min for ESO Helm install; EKS cluster add ~15 min)..."
 terraform apply -input=false -auto-approve tfplan
 ok "Terraform apply complete"
 
@@ -451,6 +400,16 @@ ESO_ROLE_ARN=$(terraform output -raw eso_role_arn 2>/dev/null || echo "")
 ok "Secret in AWS SM : $SECRET_NAME"
 [[ -n "$SECRET_ARN" ]]   && ok "Secret ARN       : $SECRET_ARN"
 [[ -n "$ESO_ROLE_ARN" ]] && ok "ESO IAM Role     : $ESO_ROLE_ARN"
+
+# EKS: get kubeconfig after cluster is created (Terraform created the cluster)
+if [[ "$CLUSTER_TYPE" == "eks" ]]; then
+  log "Fetching EKS kubeconfig: cluster=$EKS_CLUSTER_NAME region=$AWS_REGION"
+  aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" \
+    || die "Failed to get EKS kubeconfig. Check cluster name and region."
+  KUBECONFIG_ABS="$HOME/.kube/config"
+  CLUSTER_CONTEXT=$(kubectl config current-context)
+  ok "EKS context: $CLUSTER_CONTEXT"
+fi
 
 # =============================================================================
 # STEP 9 — Static credentials for ESO (local clusters only)
@@ -655,7 +614,6 @@ LAB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 CLUSTER_TYPE="$CLUSTER_TYPE"
 KUBECONFIG_ABS="$KUBECONFIG_ABS"
 CLUSTER_CONTEXT="$CLUSTER_CONTEXT"
-KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME"
 EKS_CLUSTER_NAME="$EKS_CLUSTER_NAME"
 AWS_REGION="$AWS_REGION"
 AWS_ACCOUNT="$AWS_ACCOUNT"
@@ -667,9 +625,32 @@ BUCKET_NAME="$BUCKET_NAME"
 DYNAMO_TABLE="$DYNAMO_TABLE"
 TF_DIR="$TF_DIR"
 K8S_DIR="$K8S_DIR"
-STATE
+STATE_FILE="$STATE_FILE"
 
 ok ".lab-state written → $STATE_FILE"
+
+# =============================================================================
+# Optional: set GitHub Actions secrets so CI can use S3 backend and EKS cluster name
+# =============================================================================
+if command -v gh &>/dev/null && [[ "$DRY_RUN" != "true" ]] && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
+  step "Setting GitHub Actions secrets (for CI handoff)"
+  if (cd "$REPO_ROOT" && gh auth status &>/dev/null); then
+    (
+      cd "$REPO_ROOT"
+      [[ "$USE_BACKEND" == "true" && -n "$BUCKET_NAME" && "$BUCKET_NAME" != "local" ]] && {
+        gh secret set TF_BACKEND_BUCKET --body "$BUCKET_NAME" 2>/dev/null && ok "TF_BACKEND_BUCKET set" || warn "Could not set TF_BACKEND_BUCKET"
+        gh secret set TF_BACKEND_REGION --body "$AWS_REGION" 2>/dev/null && ok "TF_BACKEND_REGION set" || true
+        gh secret set TF_BACKEND_DYNAMO --body "$DYNAMO_TABLE" 2>/dev/null && ok "TF_BACKEND_DYNAMO set" || true
+      }
+      CLUSTER_NAME_FOR_CI="$EKS_CLUSTER_NAME"
+      [[ "$CLUSTER_TYPE" == "microk8s" ]] && CLUSTER_NAME_FOR_CI="secrets-lab"
+      gh secret set EKS_CLUSTER_NAME --body "$CLUSTER_NAME_FOR_CI" 2>/dev/null && ok "EKS_CLUSTER_NAME set → $CLUSTER_NAME_FOR_CI" || true
+      gh secret set AWS_REGION --body "$AWS_REGION" 2>/dev/null && ok "AWS_REGION set" || true
+    )
+  else
+    warn "gh not authenticated — run 'gh auth login'. Secrets not set; configure TF_BACKEND_* and EKS_CLUSTER_NAME manually in repo Settings → Secrets."
+  fi
+fi
 
 # =============================================================================
 # Summary

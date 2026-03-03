@@ -80,6 +80,14 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);min-height:100
 .stat-lbl{font-size:13px;color:var(--mu);font-weight:600;letter-spacing:1px}
 
 /* TRACK PILLS */
+/* PATH PILLS (Local vs EKS) */
+.path-pills{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.path-pill{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:16px;
+  font-size:11px;font-weight:700;letter-spacing:0.5px;font-family:var(--mono)}
+.path-pill.local{background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.25);color:var(--ac)}
+.path-pill.eks{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);color:var(--wa)}
+.path-pill.eks-only{background:rgba(245,158,11,.12);border:1px solid var(--wa);color:var(--wa)}
+
 .track-pills{display:flex;gap:10px;margin-bottom:28px}
 .pill{padding:8px 18px;border-radius:20px;border:1.5px solid var(--bd);cursor:pointer;
       font-size:13px;font-weight:700;transition:all .15s;display:flex;align-items:center;gap:6px}
@@ -300,25 +308,32 @@ pre{padding:18px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-hei
 const MODULES = [
   { id:0,icon:"🧭",title:"Why External Secrets?",tag:"CORE",tc:"core",
     desc:"The real problem with native K8s secrets — and why it matters in interviews.",
-    steps:["The Problem","Architecture","Tools Overview","Prerequisites & Quick Start"] },
+    steps:["The Problem","Architecture","Tools Overview","Prerequisites & Quick Start"],
+    stepPaths:["both","both","both","both"] },
   { id:1,icon:"🔐",title:"AWS Secrets Manager + ESO",tag:"AWS",tc:"aws",
     desc:"Terraform provisions it. ESO syncs it. Your pod reads it. Full chain.",
-    steps:["Provision in AWS SM","Deploy ESO via Terraform","ExternalSecret manifest","Mount into Pod","Bonus: dataFrom and templating","Verify the chain"] },
+    steps:["Provision in AWS SM","Deploy ESO via Terraform","ExternalSecret manifest","Mount into Pod","Bonus: dataFrom and templating","Verify the chain"],
+    stepPaths:["both","both","both","both","both","both"] },
   { id:2,icon:"☁️",title:"Azure Key Vault + AKS",tag:"AKS",tc:"aks",
     desc:"AKS Workload Identity + CSI Driver. Zero credentials stored anywhere.",
-    steps:["Provision Key Vault","AKS Workload Identity","CSI Driver + Terraform","SecretProviderClass","Mount & verify"] },
+    steps:["Provision Key Vault","AKS Workload Identity","CSI Driver + Terraform","SecretProviderClass","Mount & verify"],
+    stepPaths:["both","both","both","both","both"] },
   { id:3,icon:"🔄",title:"Secret Rotation",tag:"CORE",tc:"core",
     desc:"Rotate in AWS SM or Azure KV, watch ESO pick it up, zero downtime.",
-    steps:["Rotation basics","refreshInterval & polling","Run the rotation script","Env vars vs volume mounts","Reloader pattern"] },
+    steps:["Rotation basics","refreshInterval & polling","Run the rotation script","Env vars vs volume mounts","Reloader pattern"],
+    stepPaths:["both","both","both","both","both"] },
   { id:4,icon:"🚀",title:"CI/CD with GitHub Actions",tag:"CORE",tc:"core",
     desc:"Terraform plan on PR, apply on merge. OIDC auth — zero stored credentials.",
-    steps:["Why OIDC (not keys)","Trust policy setup","Terraform workflow","Deploy workflow","Secret hygiene in logs"] },
+    steps:["Why OIDC (not keys)","Trust policy setup","Terraform workflow","Deploy workflow","Secret hygiene in logs"],
+    stepPaths:["eks-only","eks-only","eks-only","eks-only","eks-only"] },
   { id:5,icon:"📋",title:"Scenario-based interviews",tag:"CORE",tc:"core",
     desc:"13 real scenario questions senior DevOps/SRE interviewers ask. What they test and strong answers.",
-    steps:["Secret exposure incident","Migrate to cloud secret manager","Rotation without downtime","Multi-environment strategy","etcd encryption & compliance","ESO not syncing (AWS)","AKS Workload Identity failure","Zero-downtime rotation design","CI/CD OIDC security review","When NOT to use secret managers","ESO throttling at scale","When ESO goes down","IAM permission boundaries"] },
+    steps:["Secret exposure incident","Migrate to cloud secret manager","Rotation without downtime","Multi-environment strategy","etcd encryption & compliance","ESO not syncing (AWS)","AKS Workload Identity failure","Zero-downtime rotation design","CI/CD OIDC security review","When NOT to use secret managers","ESO throttling at scale","When ESO goes down","IAM permission boundaries"],
+    stepPaths:["both","both","both","both","both","both","both","both","both","both","both","both","both"] },
   { id:6,icon:"🖼️",title:"Full flow recap",tag:"CORE",tc:"core",
     desc:"The complete picture: how secrets are created and consumed, end to end. Start here if you want the big picture first.",
-    steps:["The full flow: creation to consumption"] },
+    steps:["The full flow: creation to consumption"],
+    stepPaths:["both"] },
 ];
 
 const STEPS = {
@@ -393,6 +408,7 @@ External secret managers solve all of this. AWS Secrets Manager and Azure Key Va
 },
 "1-0":{
   title:"Provision AWS Secrets Manager with Terraform",
+  costCallout:"⚠ EKS costs ~$0.16/hr. Run teardown.sh when done.",
   concept:"Create the secret in code, not the console. That makes it reviewable, auditable, and reproducible.",
   code:{file:"terraform/aws/secret.tf",content:`<span class="kw">resource</span> <span class="str">"aws_secretsmanager_secret"</span> <span class="str">"app_db"</span> {
   <span class="key">name</span>                    = <span class="str">"prod/myapp/database"</span>
@@ -1174,10 +1190,14 @@ function StepContent({ moduleId, stepIdx }) {
     return () => { if (scenarioIntervalRef.current) clearInterval(scenarioIntervalRef.current); };
   }, [key, scenarioRevealed[key]]);
 
+  const pathTypeFallback = MODULES[moduleId]?.stepPaths?.[stepIdx] || "both";
   if (!s) return (
     <div className="sc fi">
       <div className="sc-hd"><div><div className="sc-step-num">STEP {stepIdx+1}</div><div className="sc-title">{stepName}</div></div></div>
       <div className="sc-body">
+        <div className="path-pills">
+          {pathTypeFallback === "eks-only" ? <span className="path-pill eks-only">EKS only</span> : <><span className="path-pill local">Local ✓</span><span className="path-pill eks">EKS ✓</span></>}
+        </div>
         <div className="concept"><div className="concept-lbl">📦 In the Repo</div>
           <p>The full code for this step is in the repo. Open the file shown in the lab-ui sidebar and follow along.</p></div>
         <div className="tip"><p>Run: <strong>ls terraform/ k8s/ .github/</strong> to see all the files for this step.</p></div>
@@ -1189,12 +1209,38 @@ function StepContent({ moduleId, stepIdx }) {
   const revealed = scenarioRevealed[key];
   const isScenario = !!s.scenarioAnswer;
 
+  const pathType = MODULES[moduleId]?.stepPaths?.[stepIdx] || "both";
   return (
     <div className="sc fi">
       <div className="sc-hd">
         <div><div className="sc-step-num">STEP {stepIdx+1}</div><div className="sc-title">{s.title}</div></div>
       </div>
       <div className="sc-body">
+        <div className="path-pills">
+          {pathType === "eks-only" ? (
+            <span className="path-pill eks-only">EKS only</span>
+          ) : (
+            <>
+              <span className="path-pill local">Local ✓</span>
+              <span className="path-pill eks">EKS ✓</span>
+            </>
+          )}
+        </div>
+        {key === "0-3" && (
+          <div className="concept" style={{marginBottom:16}}>
+            <div className="concept-lbl">Choose your path</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginTop:8}}>
+              <thead><tr style={{borderBottom:"1px solid var(--bd)"}}><th style={{textAlign:"left",padding:"8px 6px"}}></th><th style={{textAlign:"left",padding:"8px 6px"}}>Local (kind / MicroK8s)</th><th style={{textAlign:"left",padding:"8px 6px"}}>EKS</th></tr></thead>
+              <tbody style={{color:"#8ab"}}>
+                <tr style={{borderBottom:"1px solid var(--bd)"}}><td style={{padding:"6px"}}>Setup time</td><td style={{padding:"6px"}}>~5 min</td><td style={{padding:"6px"}}>~20 min</td></tr>
+                <tr style={{borderBottom:"1px solid var(--bd)"}}><td style={{padding:"6px"}}>Cost</td><td style={{padding:"6px"}}>Free</td><td style={{padding:"6px"}}>~$0.10/hr + AWS</td></tr>
+                <tr style={{borderBottom:"1px solid var(--bd)"}}><td style={{padding:"6px"}}>CI/CD</td><td style={{padding:"6px"}}>✗</td><td style={{padding:"6px"}}>✓</td></tr>
+                <tr style={{borderBottom:"1px solid var(--bd)"}}><td style={{padding:"6px"}}>App URL</td><td style={{padding:"6px"}}>Port-forward</td><td style={{padding:"6px"}}>ALB</td></tr>
+              </tbody>
+            </table>
+            <p style={{marginTop:10,fontSize:12,color:"#8ab"}}>Pick one path; the lab content applies to both. EKS-only steps are marked with a pill.</p>
+          </div>
+        )}
         {s.concept && <div className="concept"><div className="concept-lbl">💡 The Concept</div><p>{s.concept}</p></div>}
         {s.arch && <Arch moduleId={moduleId}/>}
         {s.body && <p style={{fontSize:12,color:"#8ab",lineHeight:1.8,marginBottom:14,whiteSpace:"pre-line"}}>{s.body}</p>}
@@ -1222,6 +1268,7 @@ function StepContent({ moduleId, stepIdx }) {
         )}
         {!isScenario && (
           <>
+            {s.costCallout && <div className="tip" style={{background:"rgba(239,68,68,.08)",borderColor:"rgba(239,68,68,.25)"}}><span style={{fontSize:14,flexShrink:0}}>⚠</span><p>{s.costCallout}</p></div>}
             {s.checklist && <Checklist items={s.checklist}/>}
             {s.items && <ItemList items={s.items}/>}
             {s.code && <Code file={s.code.file} content={s.code.content}/>}

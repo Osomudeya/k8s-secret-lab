@@ -1,11 +1,19 @@
 # Teardown — Terraform destroy (AWS and optionally Azure).
-# Manual only: run from Actions tab when you want to tear down infra.
-# Does NOT delete the EKS/AKS cluster; it destroys Terraform-managed resources
-# (ESO Helm release, AWS Secrets Manager secret, IAM role, Azure Key Vault resources).
+# Manual only: run from Actions tab. Type "destroy" in the confirmation input to run.
+# Does NOT delete the EKS cluster; destroys Terraform-managed resources only.
+# When use_eks is true, deletes K8s resources (ExternalSecret, etc.) before destroy.
 name: Teardown
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'destroy' to confirm teardown"
+        required: true
+      use_eks:
+        description: "Use EKS (true) or local cluster (false)"
+        required: false
+        default: "true"
 
 permissions:
   id-token: write
@@ -24,57 +32,95 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Confirm teardown
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "destroy" ]; then
+            echo "Teardown cancelled. You must type 'destroy' in the confirmation input."
+            exit 1
+          fi
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
+      - name: Install kubectl
+        if: github.event.inputs.use_eks == 'true'
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Get EKS kubeconfig and delete K8s resources (when use_eks)
+        if: github.event.inputs.use_eks == 'true'
+        run: |
+          aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME || 'secrets-lab' }} --region ${{ secrets.AWS_REGION || 'us-east-1' }}
+          kubectl delete externalsecret app-db-secret -n default --ignore-not-found --timeout=30s || true
+          kubectl delete secret myapp-database-creds -n default --ignore-not-found --timeout=30s || true
+          kubectl delete deployment myapp -n default --ignore-not-found --timeout=60s || true
+          kubectl delete service myapp -n default --ignore-not-found --timeout=30s || true
+          echo "K8s resources cleaned so Helm uninstall can succeed"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.7.0"
 
       - name: Terraform Init
-        run: terraform init
+        env:
+          TF_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
+          TF_REGION: ${{ secrets.TF_BACKEND_REGION || secrets.AWS_REGION || 'us-east-1' }}
+          TF_DYNAMO: ${{ secrets.TF_BACKEND_DYNAMO }}
+        run: |
+          if [ -n "$TF_BUCKET" ]; then
+            terraform init -reconfigure \
+              -backend-config=bucket="$TF_BUCKET" \
+              -backend-config=key=k8s-secrets-lab/terraform.tfstate \
+              -backend-config=region="${TF_REGION}" \
+              -backend-config=dynamodb_table="${TF_DYNAMO:-k8s-secrets-lab-tflock}" \
+              -backend-config=encrypt=true
+          else
+            terraform init -reconfigure -backend=false
+          fi
 
       - name: Terraform Destroy
         run: |
           terraform destroy -auto-approve \
             -var="aws_region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
-            -var="use_eks=true"
+            -var="use_eks=${{ github.event.inputs.use_eks || 'true' }}"
         env:
           TF_IN_AUTOMATION: true
 
-  teardown-azure:
-    name: Terraform Destroy — Azure
-    runs-on: ubuntu-latest
-    environment: production
-    continue-on-error: true
-
-    defaults:
-      run:
-        working-directory: terraform/azure
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.7.0"
-
-      - name: Terraform Init
-        run: terraform init
-
-      - name: Terraform Destroy
-        run: terraform destroy -auto-approve
-        env:
-          TF_IN_AUTOMATION: true
+  # Azure — commented out; uncomment when ready to run Azure path
+  # teardown-azure:
+  #   name: Terraform Destroy — Azure
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   continue-on-error: true
+  #
+  #   defaults:
+  #     run:
+  #       working-directory: terraform/azure
+  #
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Azure Login (OIDC)
+  #       uses: azure/login@v2
+  #       with:
+  #         client-id: ${{ secrets.AZURE_CLIENT_ID }}
+  #         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+  #         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  #
+  #     - name: Setup Terraform
+  #       uses: hashicorp/setup-terraform@v3
+  #       with:
+  #         terraform_version: "1.7.0"
+  #
+  #     - name: Terraform Init
+  #       run: terraform init
+  #
+  #     - name: Terraform Destroy
+  #       run: terraform destroy -auto-approve
+  #       env:
+  #         TF_IN_AUTOMATION: true

@@ -3,6 +3,10 @@
 # Run this after everything is deployed to watch secret rotation happen live.
 # Works for the AWS path. Azure path instructions at the bottom.
 
+# Readiness check — run before anything else so the script fails fast if lab isn't up
+kubectl wait --for=condition=ready pod -l app=myapp -n default --timeout=120s 2>/dev/null || { echo "❌ Pod not ready. Run spinup.sh first (or wait for the deployment to be up)."; exit 1; }
+[ "$(kubectl get externalsecret app-db-secret -n default -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)" = "SecretSynced" ] || { echo "❌ Secret not synced yet. Wait a minute and retry."; exit 1; }
+
 SECRET_NAME="${SECRET_NAME:-prod/myapp/database}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 NEW_PASSWORD="rotated-password-$(date +%s)"
@@ -10,20 +14,6 @@ NEW_PASSWORD="rotated-password-$(date +%s)"
 echo ""
 echo "🔐 K8s Secrets Lab — Rotation Test"
 echo "────────────────────────────────────────"
-echo ""
-
-# Wait for the pod to be ready before attempting rotation
-echo "Checking lab is ready..."
-if ! kubectl wait --for=condition=ready pod -l app=myapp -n default --timeout=120s 2>/dev/null; then
-  echo "❌ Pod not ready. Run spinup.sh first (or wait for the deployment to be up)."
-  exit 1
-fi
-
-if [ "$(kubectl get externalsecret app-db-secret -n default -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)" != "SecretSynced" ]; then
-  echo "❌ Secret not synced yet. Wait a minute and retry."
-  exit 1
-fi
-echo "   ✅ Pod ready, ExternalSecret synced."
 echo ""
 
 APP_POD=$(kubectl get pod -l app=myapp -n default -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)

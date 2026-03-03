@@ -1,0 +1,107 @@
+# Rotation test — end-to-end: rotate secret → verify /secrets/compare → restart pod → verify all_match.
+# Manual only: run from Actions tab after deploy. Requires EKS + app with LoadBalancer (or set ALB_URL).
+name: Rotation test (E2E)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rotation-test:
+    name: Rotate secret and verify
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Get EKS kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ secrets.EKS_CLUSTER_NAME || 'secrets-lab' }} \
+            --region ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Wait for lab ready
+        run: |
+          kubectl wait --for=condition=ready pod -l app=myapp -n default --timeout=120s
+          [ "$(kubectl get externalsecret app-db-secret -n default -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)" = "SecretSynced" ] || { echo "ExternalSecret not synced"; exit 1; }
+
+      - name: Rotate secret in AWS Secrets Manager
+        run: |
+          NEW_PASSWORD="rotated-ci-$(date +%s)"
+          aws secretsmanager put-secret-value \
+            --secret-id "${SECRET_NAME:-prod/myapp/database}" \
+            --secret-string "{\"username\":\"dbadmin\",\"password\":\"$NEW_PASSWORD\",\"host\":\"rds.lab.example.com\",\"port\":\"5432\"}" \
+            --region ${{ secrets.AWS_REGION || 'us-east-1' }}
+          echo "NEW_PASSWORD=$NEW_PASSWORD" >> $GITHUB_ENV
+
+      - name: Force ESO sync and wait
+        run: |
+          kubectl annotate externalsecret app-db-secret force-sync="$(date +%s)" -n default --overwrite
+          sleep 15
+
+      - name: Get app URL and verify rotation_detected
+        env:
+          ALB_URL: ${{ secrets.ALB_URL }}
+        run: |
+          if [ -n "${ALB_URL}" ]; then
+            APP_URL="${ALB_URL}"
+          else
+            LB=$(kubectl get svc myapp -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+            [ -z "$LB" ] && LB=$(kubectl get svc myapp -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+            APP_URL="http://${LB}"
+          fi
+          [ -z "$APP_URL" ] || [ "$APP_URL" = "http://" ] && { echo "No LoadBalancer address; set ALB_URL secret or ensure Service has external host"; exit 1; }
+          echo "APP_URL=$APP_URL" >> $GITHUB_ENV
+          RESULT=$(curl -sf --connect-timeout 15 "${APP_URL}/secrets/compare")
+          echo "$RESULT" | python3 -m json.tool
+          echo "$RESULT" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          if not d.get('rotation_detected'):
+            print('FAIL: expected rotation_detected true after rotate')
+            sys.exit(1)
+          print('OK: rotation_detected true')
+          "
+
+      - name: Restart deployment
+        run: |
+          kubectl rollout restart deployment/myapp -n default
+          kubectl rollout status deployment/myapp -n default --timeout=120s
+
+      - name: Verify all_match after restart
+        run: |
+          sleep 5
+          RESULT=$(curl -sf --connect-timeout 15 "${APP_URL}/secrets/compare")
+          echo "$RESULT" | python3 -m json.tool
+          echo "$RESULT" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          if not d.get('all_match'):
+            print('FAIL: expected all_match true after pod restart')
+            sys.exit(1)
+          print('OK: all_match true — rotation E2E passed')
+          "
+
+      - name: Write summary
+        run: |
+          echo "## Rotation test passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Rotated secret in AWS SM" >> $GITHUB_STEP_SUMMARY
+          echo "2. ESO synced; \`/secrets/compare\` showed \`rotation_detected: true\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Restarted deployment" >> $GITHUB_STEP_SUMMARY
+          echo "4. \`/secrets/compare\` showed \`all_match: true\`" >> $GITHUB_STEP_SUMMARY

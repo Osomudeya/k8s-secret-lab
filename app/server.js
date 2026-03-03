@@ -9,7 +9,7 @@ const fs = require("fs");
 
 const PORT = process.env.PORT || 3000;
 const SECRET_KEYS = ["DB_USERNAME", "DB_PASSWORD", "DB_HOST", "DB_PORT"];
-const GITHUB_REPO_URL = "https://github.com/YOUR_ORG/YOUR_REPO"; // Replace with your repo URL
+const GITHUB_REPO_URL = "https://github.com/Osomudeya/k8s-secrets-lab";
 
 // Helper: mask a secret value for safe display
 // "super-secret-123" → "************123"
@@ -157,7 +157,7 @@ const server = http.createServer((req, res) => {
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8"><!-- must be first in head so emoji/unicode render correctly -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>K8s Secrets Lab — Sample App</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
