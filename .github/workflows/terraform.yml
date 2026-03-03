@@ -118,8 +118,8 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            // Job default working-directory is terraform/aws, so plan.out is in cwd
-            const planOutput = fs.existsSync('plan.out') ? fs.readFileSync('plan.out', 'utf8') : 'Plan output not captured.';
+            const planPath = 'terraform/aws/plan.out';
+            const planOutput = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : 'Plan output not captured.';
             const output = `#### Terraform Plan 📋
             \`\`\`
             ${planOutput}

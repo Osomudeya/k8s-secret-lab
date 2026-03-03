@@ -54,12 +54,20 @@ jobs:
       - name: Get EKS kubeconfig and delete K8s resources (when use_eks)
         if: github.event.inputs.use_eks == 'true'
         run: |
+          mkdir -p ~/.kube
           aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME || 'secrets-lab' }} --region ${{ secrets.AWS_REGION || 'us-east-1' }}
           kubectl delete externalsecret app-db-secret -n default --ignore-not-found --timeout=30s || true
           kubectl delete secret myapp-database-creds -n default --ignore-not-found --timeout=30s || true
           kubectl delete deployment myapp -n default --ignore-not-found --timeout=60s || true
           kubectl delete service myapp -n default --ignore-not-found --timeout=30s || true
           echo "K8s resources cleaned so Helm uninstall can succeed"
+
+      - name: Set EKS Terraform vars (for destroy)
+        if: github.event.inputs.use_eks == 'true'
+        run: |
+          echo "TF_VAR_create_eks=true" >> $GITHUB_ENV
+          echo "TF_VAR_use_eks=true" >> $GITHUB_ENV
+          echo "TF_VAR_cluster_name=${{ secrets.EKS_CLUSTER_NAME || 'secrets-lab' }}" >> $GITHUB_ENV
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -84,12 +92,10 @@ jobs:
           fi
 
       - name: Terraform Destroy
-        run: |
-          terraform destroy -auto-approve \
-            -var="aws_region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
-            -var="use_eks=${{ github.event.inputs.use_eks || 'true' }}"
+        run: terraform destroy -auto-approve
         env:
           TF_IN_AUTOMATION: true
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
   # Azure — commented out; uncomment when ready to run Azure path
   # teardown-azure:
