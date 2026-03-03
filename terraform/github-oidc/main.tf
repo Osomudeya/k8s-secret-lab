@@ -28,7 +28,7 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
-# Trust policy: only your repo (and branch) can assume this role
+# Trust policy: repo can assume this role from main branch or from pull_request
 data "aws_iam_policy_document" "github_trust" {
   statement {
     effect  = "Allow"
@@ -42,10 +42,15 @@ data "aws_iam_policy_document" "github_trust" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
+    # Allow: push to main, pull_request, and PR merge ref (GitHub can send ref:refs/pull/N/merge)
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"]
+      values   = [
+        "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}",
+        "repo:${var.github_repo}:pull_request",
+        "repo:${var.github_repo}:ref:refs/pull/*/merge"
+      ]
     }
   }
 }
