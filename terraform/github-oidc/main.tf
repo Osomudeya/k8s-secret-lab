@@ -71,6 +71,7 @@ data "aws_iam_policy_document" "github_actions" {
       "secretsmanager:DeleteSecret",
       "secretsmanager:DescribeSecret",
       "secretsmanager:GetSecretValue",
+      "secretsmanager:GetResourcePolicy",
       "secretsmanager:PutSecretValue",
       "secretsmanager:RestoreSecret",
       "secretsmanager:ListSecretVersionIds"
@@ -149,6 +150,24 @@ data "aws_iam_policy_document" "github_actions" {
     actions = [
       "eks:DescribeCluster",
       "eks:ListClusters"
+    ]
+    resources = ["*"]
+  }
+
+  # EC2 — required for Terraform plan/apply when create_eks = true (VPC, subnets, AZs)
+  statement {
+    effect = "Allow"
+    actions = [
+      "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeInternetGateways",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeNatGateways",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeVpcAttribute",
+      "ec2:DescribeAccountAttributes"
     ]
     resources = ["*"]
   }

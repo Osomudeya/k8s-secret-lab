@@ -66,3 +66,5 @@ After that, the Terraform CI, Deploy, and Teardown workflows can use this role v
 ## Restrict to a different branch or environment
 
 To allow only `production` branch or a GitHub Environment, change the trust policy condition in `main.tf` (e.g. `ref:refs/heads/production` or use `environment` claim). Default is `main`.
+
+If your workflow job uses `environment: production`, the OIDC token’s `sub` is `repo:owner/repo:environment:production`. The trust policy allows this by default via `github_environment = "production"`. If you use a different environment name, pass `-var="github_environment=your-env-name"` when running `terraform apply`.

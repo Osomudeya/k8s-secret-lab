@@ -9,6 +9,12 @@ variable "github_branch" {
   default     = "main"
 }
 
+variable "github_environment" {
+  description = "GitHub Actions environment name used in your workflow (e.g. environment: production). OIDC sub becomes repo:owner/repo:environment:NAME. Set to the same value as in your workflow job."
+  type        = string
+  default     = "production"
+}
+
 variable "aws_region" {
   description = "AWS region (for state bucket name pattern)"
   type        = string
