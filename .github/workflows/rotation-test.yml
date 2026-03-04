@@ -49,12 +49,13 @@ jobs:
             --region ${{ secrets.AWS_REGION || 'us-east-1' }}
           echo "NEW_PASSWORD=$NEW_PASSWORD" >> $GITHUB_ENV
 
-      - name: Force ESO sync and wait
+      - name: Force ESO sync
         run: |
           kubectl annotate externalsecret app-db-secret force-sync="$(date +%s)" -n default --overwrite
-          sleep 15
+          sleep 10
 
-      - name: Get app URL and verify rotation_detected
+      - name: Get app URL
+        id: app-url
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
@@ -66,17 +67,24 @@ jobs:
             APP_URL="http://${LB}"
           fi
           [ -z "$APP_URL" ] || [ "$APP_URL" = "http://" ] && { echo "No LoadBalancer address; set ALB_URL secret or ensure Service has external host"; exit 1; }
-          echo "APP_URL=$APP_URL" >> $GITHUB_ENV
-          RESULT=$(curl -sf --connect-timeout 15 "${APP_URL}/secrets/compare")
-          echo "$RESULT" | python3 -m json.tool
-          echo "$RESULT" | python3 -c "
-          import json, sys
-          d = json.load(sys.stdin)
-          if not d.get('rotation_detected'):
-            print('FAIL: expected rotation_detected true after rotate')
-            sys.exit(1)
-          print('OK: rotation_detected true')
-          "
+          echo "url=$APP_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for rotation_detected (ESO + kubelet can take 60s+)
+        env:
+          APP_URL: ${{ steps.app-url.outputs.url }}
+        run: |
+          for i in $(seq 1 24); do
+            RESULT=$(curl -sf --connect-timeout 10 "${APP_URL}/secrets/compare" 2>/dev/null || echo "{}")
+            if echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('rotation_detected') else 1)" 2>/dev/null; then
+              echo "$RESULT" | python3 -m json.tool
+              echo "OK: rotation_detected true after ${i}0s"
+              exit 0
+            fi
+            echo "Attempt $i/24: rotation_detected not yet true; waiting 10s..."
+            sleep 10
+          done
+          echo "FAIL: rotation_detected still false after 4 minutes (ESO/kubelet may not have updated volume)"
+          exit 1
 
       - name: Restart deployment
         run: |
@@ -84,6 +92,8 @@ jobs:
           kubectl rollout status deployment/myapp -n default --timeout=120s
 
       - name: Verify all_match after restart
+        env:
+          APP_URL: ${{ steps.app-url.outputs.url }}
         run: |
           sleep 5
           RESULT=$(curl -sf --connect-timeout 15 "${APP_URL}/secrets/compare")
