@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Osomudeya/k8s-secret-lab/actions/workflows/terraform.yml/badge.svg)](https://github.com/Osomudeya/k8s-secret-lab/actions) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![EKS cost](https://img.shields.io/badge/EKS-%7E%240.16%2Fhr-orange)](docs/DEPLOY-EKS.md)
 
-Learn how real production systems securely deliver secrets to Kubernetes pods—with Terraform, AWS Secrets Manager, External Secrets Operator (ESO), secret rotation (zero-downtime), and CI/CD.
+Learn how real production systems securely deliver secrets to Kubernetes pods with Terraform, AWS Secrets Manager, External Secrets Operator (ESO), secret rotation (zero-downtime), and CI/CD.
 
 **Quick answers:**  
 - **What problem?** Hardcoded secrets and plain K8s Secrets in etcd; you need a secure path from cloud vault → cluster → pod.  
