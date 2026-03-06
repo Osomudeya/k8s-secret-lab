@@ -41,7 +41,9 @@ EKS: Actions → Rotation test. Workflow rotates secret, checks rotation_detecte
 
 ## Why env is stale; why volume updates
 
-Env: set once at container start; process env block does not change when Secret updates. Volume: kubelet syncs Secret-backed volume; app reads file per request so sees new value. Reloader: on Secret change triggers rolling restart so env refreshes.
+- **Env vars** are set once at container start and stay fixed for the life of the process. When the Secret is updated, the process env block does not change.
+- **Volume**: the kubelet keeps the Secret-backed file in sync when the Secret changes (~60s). The app reads the file on each request, so it sees the new value.
+- **The gap**: after rotation, volume = new value, env = old value until the pod restarts. That’s the “env stale, volume fresh” split interviewers care about. Use Reloader (or `kubectl rollout restart`) so env picks up the new secret.
 
 ## Rotation with the CSI driver (myapp-csi)
 

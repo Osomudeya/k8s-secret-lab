@@ -26,7 +26,7 @@ Learn how real production systems securely deliver secrets to Kubernetes pods wi
 1. **Understand the architecture** → [How secrets flow](docs/HOW-IT-WORKS.md) (includes diagram below).
 2. **Run the local lab** → Quick Start above or [Local setup](docs/DEPLOY-LOCAL.md).
 3. **Observe secret rotation** → [Rotation](docs/ROTATION.md) and `bash rotation/test-rotation.sh`.
-4. **Compare ESO vs CSI** → [ESO vs CSI](docs/ESO-VS-CSI.md) and optional [CSI driver on AWS](docs/CSI-DRIVER-AWS.md).
+4. **Compare ESO vs CSI** → [ESO vs CSI](docs/ESO-VS-CSI.md) and optional [CSI driver on AWS](docs/CSI-DRIVER-AWS.md) (or [EKS + CSI step-by-step](docs/EKS-CSI-STEPS.md)).
 5. **Deploy to EKS** → [EKS setup](docs/DEPLOY-EKS.md) for production-like CI/CD and ALB.
 
 ---

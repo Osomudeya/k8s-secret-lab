@@ -43,7 +43,14 @@ Owned by ESO (`creationPolicy: Owner`). base64 in etcd. Pods use it via `envFrom
 
 EKS OIDC → pod ServiceAccount annotated with IAM role ARN → ESO exchanges K8s token for AWS temp creds via STS. Role policy: GetSecretValue (and describe/list) on this secret only. No access keys in cluster.
 
-### Env vars vs Volume mount
+### Env vars vs Volume mount — the split that matters
+
+Your app can use the Secret in two ways. This is where most tutorials stop and where behavior gets interesting.
+
+- **Env vars** — Kubernetes injects secret keys as environment variables when the container starts. They are **fixed for the life of the process**. When the Secret is updated (e.g. after rotation), the env vars **do not change** until the pod restarts.
+- **Volume mount** — Kubernetes mounts the Secret as a file (or files) on disk. The **kubelet** (the node agent that runs your containers) keeps that file in sync when the Secret changes, usually within **about 60 seconds**. So after you rotate the secret in AWS, the volume file gets the new value; the env var still has the old one until the pod restarts.
+
+That gap — **env stale, volume fresh** — is what breaks people at 2am and what interviewers want you to explain. Use Reloader (or a manual rollout) to restart pods so env vars pick up the new secret with no downtime.
 
 | | Env vars | Volume mount |
 |---|---|---|
