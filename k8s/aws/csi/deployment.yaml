@@ -1,0 +1,78 @@
+# CSI app deployment — works for both EKS and MicroK8s.
+#
+# EKS: apply this file as-is. Set serviceAccountName: myapp-csi and create the
+#      ServiceAccount with eks.amazonaws.com/role-arn (IRSA).
+# MicroK8s: use the Kustomize overlay so the pod gets AWS credentials via
+#      nodePublishSecretRef: kubectl apply -k k8s/aws/csi/overlays/microk8s
+#
+# Prereqs: CSI driver + AWS provider, SecretProviderClass. See docs/CSI-DRIVER-AWS.md.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-csi
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp-csi
+  template:
+    metadata:
+      labels:
+        app: myapp-csi
+    spec:
+      # EKS: uncomment and create ServiceAccount with IRSA.
+      # serviceAccountName: myapp-csi
+      containers:
+        - name: myapp
+          image: veeno/k8s-secrets-lab-app:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: myapp-database-creds
+          volumeMounts:
+            - name: csi-secrets
+              mountPath: /etc/secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: csi-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "aws-sm-lab"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-csi
+  namespace: default
+spec:
+  selector:
+    app: myapp-csi
+  ports:
+    - port: 80
+      targetPort: 3000
+  type: ClusterIP

@@ -1,5 +1,5 @@
 variable "github_repo" {
-  description = "GitHub repo in format owner/repo (e.g. Osomudeya/k8s-secrets-lab)"
+  description = "GitHub repo in format owner/repo (e.g. Osomudeya/k8s-secret-lab)"
   type        = string
 }
 

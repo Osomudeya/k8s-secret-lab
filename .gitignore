@@ -36,7 +36,9 @@ build/
 Thumbs.db
 
 # Logs
+logs/
 *.log
+*.log.*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -48,3 +50,6 @@ yarn-error.log*
 coverage/
 .nyc_output/
 *.tgz
+
+# Drafts (not for version control)
+article.md

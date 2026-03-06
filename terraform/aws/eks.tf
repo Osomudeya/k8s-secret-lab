@@ -24,7 +24,8 @@ resource "aws_subnet" "public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    # "owned" = this cluster owns the subnet (required for nodes to join when we create VPC)
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
   }
 }
 
@@ -112,6 +113,65 @@ resource "aws_iam_role_policy_attachment" "eks_node_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
+# SSM so you can Session Manager into nodes to debug (e.g. run aws ec2 describe-instances and see actual error).
+resource "aws_iam_role_policy_attachment" "eks_node_ssm" {
+  count      = var.create_eks ? 1 : 0
+  role       = aws_iam_role.eks_node[0].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# AL2023 nodeadm needs EC2 Describe + EKS DescribeCluster to bootstrap (get instance identity, then join cluster).
+# Inline + managed so instance metadata credentials reliably get these permissions.
+resource "aws_iam_role_policy" "eks_node_describe_instances" {
+  count  = var.create_eks ? 1 : 0
+  name   = "eks-node-describe-instances"
+  role   = aws_iam_role.eks_node[0].name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ec2:DescribeInstances", "ec2:DescribeInstanceStatus", "ec2:DescribeTags", "ec2:DescribeRouteTables", "ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVolumes", "ec2:DescribeVolumesModifications", "ec2:DescribeVpcs", "eks:DescribeCluster"]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_policy" "eks_node_describe_instances" {
+  count       = var.create_eks ? 1 : 0
+  name        = "eks-node-describe-instances"
+  description = "EC2/EKS describe for AL2023 nodeadm bootstrap"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ec2:DescribeInstances", "ec2:DescribeInstanceStatus", "ec2:DescribeTags", "ec2:DescribeRouteTables", "ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVolumes", "ec2:DescribeVolumesModifications", "ec2:DescribeVpcs", "eks:DescribeCluster"]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_describe_instances" {
+  count      = var.create_eks ? 1 : 0
+  role       = aws_iam_role.eks_node[0].name
+  policy_arn = aws_iam_policy.eks_node_describe_instances[0].arn
+}
+
+resource "time_sleep" "wait_iam_propagation" {
+  count = var.create_eks ? 1 : 0
+
+  depends_on = [
+    aws_iam_role_policy.eks_node_describe_instances,
+    aws_iam_role_policy_attachment.eks_node_describe_instances,
+    aws_iam_role_policy_attachment.eks_node_worker,
+    aws_iam_role_policy_attachment.eks_node_cni,
+    aws_iam_role_policy_attachment.eks_node_ecr,
+    aws_iam_role_policy_attachment.eks_node_ssm,
+  ]
+  create_duration = "90s"
+}
+
 # 7. EKS cluster
 resource "aws_eks_cluster" "cluster" {
   count    = var.create_eks ? 1 : 0
@@ -121,8 +181,9 @@ resource "aws_eks_cluster" "cluster" {
   version = "1.29"
 
   vpc_config {
-    subnet_ids             = aws_subnet.public[*].id
-    endpoint_public_access = true
+    subnet_ids              = aws_subnet.public[*].id
+    endpoint_public_access   = true
+    endpoint_private_access  = true
   }
 
   # Required for EKS Access Entries (e.g. GitHub Actions OIDC role). Default is CONFIG_MAP only.
@@ -133,7 +194,9 @@ resource "aws_eks_cluster" "cluster" {
   }
 
   depends_on = [
-    aws_iam_role_policy_attachment.eks_cluster_policy
+    aws_iam_role_policy_attachment.eks_cluster_policy,
+    aws_internet_gateway.main[0],
+    aws_route_table_association.public,
   ]
 }
 
@@ -157,7 +220,8 @@ resource "aws_eks_node_group" "main" {
   depends_on = [
     aws_iam_role_policy_attachment.eks_node_worker,
     aws_iam_role_policy_attachment.eks_node_cni,
-    aws_iam_role_policy_attachment.eks_node_ecr
+    aws_iam_role_policy_attachment.eks_node_ecr,
+    time_sleep.wait_iam_propagation,
   ]
 }
 

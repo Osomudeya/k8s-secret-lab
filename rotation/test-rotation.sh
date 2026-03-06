@@ -113,8 +113,12 @@ echo "────────────────────────�
 echo "💡 Key insight: volume mount updated automatically."
 echo "   Env var still shows old value — it only updates on pod restart."
 echo ""
-echo "   If you installed Reloader, watch for the rolling restart:"
-echo "   kubectl rollout status deployment/myapp"
+echo "   To get match ✓ again, RESTART the deployment (picks up new env vars):"
+echo "   kubectl rollout restart deployment/myapp -n default"
+echo "   kubectl rollout status deployment/myapp -n default"
+echo "   Then refresh the app page or curl /secrets/compare again."
+echo ""
+echo "   (With Reloader installed, the restart happens automatically when the Secret changes.)"
 echo ""
 
 # -------------------------------------------------------

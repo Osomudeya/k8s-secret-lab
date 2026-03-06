@@ -56,11 +56,15 @@ jobs:
         run: |
           mkdir -p ~/.kube
           aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME || 'secrets-lab' }} --region ${{ secrets.AWS_REGION || 'us-east-1' }}
+          if ! kubectl get nodes --request-timeout=10s 2>/dev/null; then
+            echo "Cluster unreachable (no EKS access for this role). Skipping K8s cleanup; Terraform destroy will still run."
+            exit 0
+          fi
           kubectl delete externalsecret app-db-secret -n default --ignore-not-found --timeout=30s || true
           kubectl delete secret myapp-database-creds -n default --ignore-not-found --timeout=30s || true
           kubectl delete deployment myapp -n default --ignore-not-found --timeout=60s || true
           kubectl delete service myapp -n default --ignore-not-found --timeout=30s || true
-          echo "K8s resources cleaned so Helm uninstall can succeed"
+          echo "K8s resources cleaned"
 
       - name: Set EKS Terraform vars (for destroy)
         if: github.event.inputs.use_eks == 'true'

@@ -28,8 +28,11 @@
 #   bash spinup.sh --skip-cluster        # skip cluster setup, use current context
 #
 # Environment variables (all optional):
-#   AWS_REGION          override region (default: us-east-1)
-#   EKS_CLUSTER_NAME    when --cluster eks (default: secrets-lab)
+#   AWS_REGION                  override region (default: us-east-1)
+#   EKS_CLUSTER_NAME           when --cluster eks (default: secrets-lab)
+#   GITHUB_ACTIONS_ROLE_ARN    when --cluster eks: IAM role ARN for GitHub OIDC.
+#                              Terraform creates EKS access entry so CI/teardown can talk to the cluster.
+#                              Set to the same ARN you use as AWS_ROLE_ARN in repo secrets.
 # =============================================================================
 
 set -euo pipefail
@@ -213,10 +216,16 @@ fi
 # Expand ~ so Terraform providers can use the path directly (MicroK8s only; EKS set after apply)
 if [[ -n "$KUBECONFIG_PATH" ]]; then
   KUBECONFIG_ABS="${KUBECONFIG_PATH/#\~/$HOME}"
+  export KUBECONFIG="$KUBECONFIG_ABS"
   log "Verifying cluster connectivity..."
-  kubectl cluster-info 2>/dev/null | head -1 \
-    || die "Cannot reach cluster. Kubeconfig: $KUBECONFIG_ABS"
-  ok "Cluster reachable"
+  if KUBECONFIG="$KUBECONFIG_ABS" kubectl cluster-info --request-timeout=15s 2>/dev/null | head -1; then
+    ok "Cluster reachable"
+  else
+    warn "Cannot reach cluster with kubeconfig: $KUBECONFIG_ABS"
+    warn "If MicroK8s runs in a VM (e.g. 192.168.64.x), the host may not reach the API. Continuing anyway — Terraform/Helm will fail later if unreachable."
+    warn "To test: KUBECONFIG=$KUBECONFIG_ABS kubectl cluster-info"
+    ok "Continuing (cluster not verified)"
+  fi
 else
   KUBECONFIG_ABS=""
 fi
@@ -331,6 +340,13 @@ TF_VARS+=("-var=create_eks=${CREATE_EKS}")
 TF_VARS+=("-var=use_eks=${USE_EKS}")
 TF_VARS+=("-var=cluster_name=${EKS_CLUSTER_NAME}")
 
+# EKS: grant GitHub Actions role cluster access (so CI and teardown can run kubectl/helm).
+GITHUB_ROLE_ARN="${GITHUB_ACTIONS_ROLE_ARN:-${AWS_ROLE_ARN:-}}"
+if [[ "$CLUSTER_TYPE" == "eks" && -n "$GITHUB_ROLE_ARN" ]]; then
+  TF_VARS+=("-var=github_actions_role_arn=${GITHUB_ROLE_ARN}")
+  log "github_actions_role_arn → (set for EKS access entry)"
+fi
+
 # Pass kubeconfig + context for MicroK8s so Helm/kubectl providers target the cluster.
 [[ -n "$KUBECONFIG_ABS" ]] && {
   TF_VARS+=("-var=kubeconfig_path=${KUBECONFIG_ABS}")
@@ -386,6 +402,28 @@ if aws secretsmanager describe-secret --secret-id "$CHECK_SECRET_NAME" --region 
 fi
 
 # =============================================================================
+# EKS only: create cluster first so kubeconfig can be updated before Helm runs
+# (Helm/kubectl providers use config_path; they need the cluster in kubeconfig)
+# =============================================================================
+if [[ "$CLUSTER_TYPE" == "eks" ]]; then
+  if ! terraform state show aws_eks_cluster.cluster &>/dev/null; then
+    step "Step 6b/13 — Create EKS cluster (then update-kubeconfig before full apply)"
+    log "Creating EKS cluster and node group first so kubeconfig is ready for ESO install..."
+    warn "Do not interrupt Terraform here — VPC, IGW, route table, and IAM must complete or nodes will not join. See docs/TROUBLESHOOTING.md if you hit issues."
+    terraform apply -target=aws_eks_cluster.cluster -target=aws_eks_node_group.main \
+      -input=false -auto-approve "${TF_VARS[@]}" || exit 1
+    log "Updating kubeconfig for cluster: $EKS_CLUSTER_NAME"
+    aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" \
+      || die "Failed to get EKS kubeconfig. Check cluster name and region."
+    ok "EKS cluster ready; kubeconfig updated."
+    log "Waiting for EKS nodes to be Ready (timeout: 5 min)..."
+    kubectl wait --for=condition=Ready nodes --all --timeout=300s \
+      || die "Nodes not Ready after 5 min. Check: kubectl get nodes"
+    ok "Nodes Ready"
+  fi
+fi
+
+# =============================================================================
 # STEP 7 — Terraform plan
 # =============================================================================
 step "Step 7/13 — Terraform plan"
@@ -430,12 +468,42 @@ if [[ "$CLUSTER_TYPE" == "eks" ]]; then
 fi
 
 # =============================================================================
-# STEP 9 — Static credentials for ESO (local clusters only)
-# EKS uses IRSA — skip entirely
+# STEP 9 — ESO install (MicroK8s) + static credentials + SecretStore
+# On MicroK8s, eso.tf has count=0 so Terraform skips ESO; we install via Helm here.
+# EKS uses IRSA — skip credentials/SecretStore, Terraform already installed ESO.
 # =============================================================================
 step "Step 9/13 — ESO authentication"
 
 if [[ "$CLUSTER_TYPE" != "eks" ]]; then
+  export KUBECONFIG="${KUBECONFIG_ABS:-$HOME/.kube/config}"
+  # Install ESO via Helm (MicroK8s path — Terraform doesn't do this locally)
+  log "Installing ESO via Helm..."
+  helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
+  helm repo update
+  if helm list -n external-secrets 2>/dev/null | grep -q "external-secrets"; then
+    ok "ESO already installed"
+  else
+    helm install external-secrets external-secrets/external-secrets \
+      -n external-secrets \
+      --create-namespace \
+      --set installCRDs=true \
+      --wait \
+      --timeout 300s \
+      || die "Helm install of ESO failed. Check: kubectl get pods -n external-secrets"
+    ok "ESO installed"
+  fi
+  # Always wait for CRD before applying SecretStore (needed after fresh install or when cluster was recreated)
+  log "Ensuring SecretStore CRD is established..."
+  for i in $(seq 1 20); do
+    if kubectl get crd secretstores.external-secrets.io &>/dev/null; then
+      kubectl wait --for=condition=Established crd/secretstores.external-secrets.io --timeout=30s && break
+    fi
+    warn "CRD not yet available (attempt $i/20) — waiting 5s..."
+    sleep 5
+  done
+  kubectl get crd secretstores.external-secrets.io &>/dev/null \
+    || die "SecretStore CRD never became available."
+  ok "SecretStore CRD established"
   log "Local cluster — configuring static AWS credentials for ESO"
   warn "IRSA requires EKS. On kind/MicroK8s, ESO authenticates via a K8s Secret."
   warn "Use a dedicated IAM user scoped to only this secret in real setups."
@@ -501,6 +569,29 @@ ok "ESO running"
 # =============================================================================
 step "Step 11/13 — Applying K8s manifests"
 
+log "Waiting for ESO CRDs to be established..."
+for crd in externalsecrets.external-secrets.io clustersecretstores.external-secrets.io secretstores.external-secrets.io; do
+  for i in $(seq 1 24); do
+    kubectl wait --for=condition=Established "crd/$crd" --timeout=10s 2>/dev/null && break
+    warn "CRD $crd not ready (attempt $i/24) — waiting 5s..."
+    sleep 5
+  done
+  kubectl get "crd/$crd" &>/dev/null || die "CRD $crd never became available"
+done
+ok "All ESO CRDs established"
+
+if [[ "$CLUSTER_TYPE" == "eks" ]]; then
+  log "Waiting for ClusterSecretStore to be ready..."
+  for i in $(seq 1 12); do
+    kubectl get clustersecretstore aws-secrets-manager &>/dev/null && break
+    warn "ClusterSecretStore not ready (attempt $i/12) — waiting 5s..."
+    sleep 5
+  done
+  kubectl get clustersecretstore aws-secrets-manager &>/dev/null \
+    || die "ClusterSecretStore aws-secrets-manager not found. Check Terraform apply completed."
+  ok "ClusterSecretStore ready"
+fi
+
 log "Applying ExternalSecret..."
 if [[ "$CLUSTER_TYPE" != "eks" ]]; then
   # Local clusters: patch the ExternalSecret to point at the static SecretStore
@@ -517,8 +608,8 @@ else
   ok "ExternalSecret applied (ClusterSecretStore / IRSA)"
 fi
 
-log "Waiting 20s for ESO to sync from AWS SM..."
-sleep 20
+log "Waiting 45s for ESO to sync from AWS SM..."
+sleep 45
 
 SYNC_REASON=$(kubectl get externalsecret app-db-secret -n default \
   -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || echo "Unknown")
@@ -624,6 +715,19 @@ echo ""
 # =============================================================================
 step "Step 13/13 — Saving lab state"
 
+# Defensive defaults so no variable is unset (set -u) when writing state or gh secrets
+CLUSTER_NAME_FOR_CI="${EKS_CLUSTER_NAME:-secrets-lab}"
+[[ "$CLUSTER_TYPE" == "microk8s" ]] && CLUSTER_NAME_FOR_CI="secrets-lab"
+AWS_ACCOUNT="${AWS_ACCOUNT:-}"
+KUBECONFIG_ABS="${KUBECONFIG_ABS:-}"
+CLUSTER_CONTEXT="${CLUSTER_CONTEXT:-}"
+EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-secrets-lab}"
+SECRET_NAME="${SECRET_NAME:-prod/myapp/database}"
+SECRET_ARN="${SECRET_ARN:-}"
+ESO_ROLE_ARN="${ESO_ROLE_ARN:-}"
+BUCKET_NAME="${BUCKET_NAME:-local}"
+DYNAMO_TABLE="${DYNAMO_TABLE:-local}"
+
 cat > "$STATE_FILE" <<STATE
 # K8s Secrets Lab — state file
 # Written: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -644,15 +748,13 @@ DYNAMO_TABLE="$DYNAMO_TABLE"
 TF_DIR="$TF_DIR"
 K8S_DIR="$K8S_DIR"
 STATE_FILE="$STATE_FILE"
+STATE
 
 ok ".lab-state written → $STATE_FILE"
 
 # =============================================================================
 # Optional: set GitHub Actions secrets so CI can use S3 backend and EKS cluster name
 # =============================================================================
-CLUSTER_NAME_FOR_CI="${EKS_CLUSTER_NAME:-secrets-lab}"
-[[ "$CLUSTER_TYPE" == "microk8s" ]] && CLUSTER_NAME_FOR_CI="secrets-lab"
-
 if command -v gh &>/dev/null && [[ "$DRY_RUN" != "true" ]] && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
   step "Setting GitHub Actions secrets (for CI handoff)"
   if (cd "$REPO_ROOT" && gh auth status &>/dev/null); then
@@ -665,6 +767,9 @@ if command -v gh &>/dev/null && [[ "$DRY_RUN" != "true" ]] && git -C "$REPO_ROOT
       }
       gh secret set EKS_CLUSTER_NAME --body "$CLUSTER_NAME_FOR_CI" 2>/dev/null && ok "EKS_CLUSTER_NAME set → $CLUSTER_NAME_FOR_CI" || true
       gh secret set AWS_REGION --body "$AWS_REGION" 2>/dev/null && ok "AWS_REGION set" || true
+      if [[ -n "${GITHUB_ACTIONS_ROLE_ARN:-${AWS_ROLE_ARN:-}}" ]]; then
+        gh secret set AWS_ROLE_ARN --body "${GITHUB_ACTIONS_ROLE_ARN:-${AWS_ROLE_ARN:-}}" 2>/dev/null && ok "AWS_ROLE_ARN set (for OIDC + EKS access)" || true
+      fi
     )
   else
     warn "gh not authenticated — run 'gh auth login'. Secrets not set; configure TF_BACKEND_* and EKS_CLUSTER_NAME manually in repo Settings → Secrets."

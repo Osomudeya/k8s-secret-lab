@@ -116,7 +116,19 @@ if [[ ! -f "$STATE_FILE" ]]; then
   K8S_DIR="$REPO_ROOT/k8s/aws"
 else
   # shellcheck source=/dev/null
-  source "$STATE_FILE"
+  source "$STATE_FILE" 2>/dev/null || true
+  LAB_DATE="${LAB_DATE:-unknown}"
+  CLUSTER_TYPE="${CLUSTER_TYPE:-generic}"
+  KUBECONFIG_ABS="${KUBECONFIG_ABS:-${KUBECONFIG:-$HOME/.kube/config}}"
+  CLUSTER_CONTEXT="${CLUSTER_CONTEXT:-}"
+  KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-secrets-lab}"
+  AWS_REGION="${AWS_REGION:-us-east-1}"
+  SECRET_NAME="${SECRET_NAME:-prod/myapp/database}"
+  USE_BACKEND="${USE_BACKEND:-false}"
+  BUCKET_NAME="${BUCKET_NAME:-local}"
+  DYNAMO_TABLE="${DYNAMO_TABLE:-local}"
+  TF_DIR="${TF_DIR:-$REPO_ROOT/terraform/aws}"
+  K8S_DIR="${K8S_DIR:-$REPO_ROOT/k8s/aws}"
   ok "State loaded from .lab-state (created: $LAB_DATE)"
   log "Cluster      : $CLUSTER_TYPE"
   log "Kubeconfig   : $KUBECONFIG_ABS"

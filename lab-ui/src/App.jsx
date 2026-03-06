@@ -379,11 +379,12 @@ External secret managers solve all of this. AWS Secrets Manager and Azure Key Va
   items:[
     ["Terraform","Provisions AWS SM / Azure KV, IAM roles, and installs operators via Helm. Secret infrastructure is code — reviewable, repeatable, auditable."],
     ["External Secrets Operator (ESO)","K8s controller that watches ExternalSecret CRDs and syncs them from your secret store into native K8s secrets. Cloud-agnostic."],
-    ["Secrets Store CSI Driver","Azure-native approach. Mounts secrets directly as files via the Container Storage Interface. Also syncs to K8s Secret objects for env var support."],
+    ["Secrets Store CSI Driver — Know It Exists","Mounts cloud secrets as files via the Container Storage Interface. Has providers for AWS, Azure, GCP; standard on AKS, used on EKS too. This lab uses ESO on AWS (cloud-agnostic, creates K8s Secrets for envFrom + volume). Interviewers ask 'ESO vs CSI?' — both are valid; we chose ESO for one pattern across the lab and K8s Secret–first model."],
     ["IRSA / Workload Identity","How ESO/pods authenticate to AWS/Azure without any access keys. K8s ServiceAccount → OIDC token → cloud IAM → temporary credentials."],
     ["GitHub Actions OIDC","CI/CD authenticates to AWS/Azure using short-lived tokens. Zero long-lived credentials stored in GitHub."],
     ["Stakater Reloader","Watches K8s Secrets and triggers rolling restarts when they change. The missing piece for env-var-based apps during rotation."],
     ["Sealed Secrets (Bitnami) — Know It Exists","An alternative pattern: encrypts secrets so they're safe to commit to Git. Unlike ESO, it doesn't sync from an external store — the encrypted secret IS the source of truth. Good for GitOps workflows. Interviewers sometimes ask you to compare ESO vs Sealed Secrets. ESO = external source of truth synced into K8s. Sealed Secrets = encrypted secret lives in Git, decrypted in-cluster. We cover ESO in this lab; know both patterns exist."],
+    ["ESO vs CSI Driver — Interview Ready","Two ways to get cloud secrets into pods: (1) ESO syncs into a K8s Secret; pod uses secretRef + volume. (2) Secrets Store CSI Driver mounts files directly (and can sync to a Secret). Both are standard. We use ESO here: one pattern for AWS/Azure/GCP, and apps get a real Secret for envFrom. If asked why not CSI on AWS, say: 'Both exist; this lab chose ESO for cloud-agnostic CRDs and K8s Secret–first so the app can use envFrom and volume the same way.' See docs/ESO-VS-CSI.md in the repo for the full comparison."],
   ],
 },
 "0-3":{
@@ -395,14 +396,14 @@ External secret managers solve all of this. AWS Secrets Manager and Azure Key Va
     "kind installed for local cluster — kind version",
     "AWS CLI configured — aws configure (for AWS track)",
     "Azure CLI logged in — az login (for Azure track)",
-    "Clone this repo — git clone https://github.com/yourusername/k8s-secrets-lab",
+    "Clone this repo — git clone https://github.com/Osomudeya/k8s-secret-lab",
     "Start local cluster — kind create cluster --name secrets-lab",
   ],
   term:`<span class="t-p">$</span> <span class="t-c">kind create cluster --name secrets-lab</span>
 <span class="t-s">✓ Cluster created</span>
 <span class="t-p">$</span> <span class="t-c">kubectl cluster-info</span>
 <span class="t-s">Kubernetes control plane running at https://127.0.0.1:xxxxx</span>
-<span class="t-p">$</span> <span class="t-c">cd k8s-secrets-lab && ls</span>
+<span class="t-p">$</span> <span class="t-c">cd k8s-secret-lab && ls</span>
 <span class="t-o">lab-ui/  terraform/  k8s/  app/  rotation/  .github/</span>`,
   tip:"You're 2 minutes from the first working secret. The lab-ui is already running — now let's build the real thing.",
 },
@@ -456,7 +457,7 @@ Apply complete! Resources: 4 added.</span>`,
 <span class="kw">resource</span> <span class="str">"kubectl_manifest"</span> <span class="str">"cluster_secret_store"</span> {
   <span class="key">depends_on</span> = [<span class="val">helm_release.external_secrets</span>]
   <span class="key">yaml_body</span> = <span class="val"><<-YAML</span>
-    apiVersion: external-secrets.io/v1beta1
+    apiVersion: external-secrets.io/v1
     kind: ClusterSecretStore
     metadata:
       name: aws-secrets-manager
@@ -479,7 +480,7 @@ aws-secrets-manager   30s   Valid    ReadWrite</span>`,
 "1-2":{
   title:"Create the ExternalSecret Resource",
   concept:"ExternalSecret is the CRD that tells ESO: fetch THIS from the store, create THAT K8s Secret. This is the glue.",
-  code:{file:"k8s/aws/external-secret.yaml",content:`<span class="key">apiVersion</span>: <span class="val">external-secrets.io/v1beta1</span>
+  code:{file:"k8s/aws/external-secret.yaml",content:`<span class="key">apiVersion</span>: <span class="val">external-secrets.io/v1</span>
 <span class="key">kind</span>: <span class="val">ExternalSecret</span>
 <span class="key">metadata</span>:
   <span class="key">name</span>: <span class="val">app-db-secret</span>
@@ -739,7 +740,7 @@ The challenge: if your app reads a secret once at startup and caches it, rotatio
 },
 "3-2":{
   title:"Run the Rotation Script",
-  concept:"test-rotation.sh does the whole thing: updates the secret, forces ESO sync, compares env var vs volume mount. Run it and watch the difference.",
+  concept:"test-rotation.sh does the whole thing: updates the secret, forces ESO sync, compares env var vs volume mount. Run it and watch the difference. View the script: https://github.com/Osomudeya/k8s-secret-lab/blob/main/rotation/test-rotation.sh",
   term:`<span class="t-p">$</span> <span class="t-c">chmod +x rotation/test-rotation.sh</span>
 <span class="t-p">$</span> <span class="t-c">bash rotation/test-rotation.sh</span>
 
@@ -814,7 +815,7 @@ Setup: one trust policy in AWS IAM, one permission in your repo (id-token: write
     <span class="str">"StringLike"</span>: {
       <span class="cm">      // Only YOUR repo on main branch can assume this role</span>
       <span class="str">"token.actions.githubusercontent.com:sub"</span>: 
-        <span class="str">"repo:yourusername/k8s-secrets-lab:ref:refs/heads/main"</span>
+        <span class="str">"repo:Osomudeya/k8s-secret-lab:ref:refs/heads/main"</span>
     }
   }
 }`},
@@ -1423,8 +1424,8 @@ function HomeView({ onSelect }) {
           ))}
         </div>
         <div style={{marginBottom:6,fontSize:11,color:"var(--mu)",fontWeight:700,letterSpacing:2,fontFamily:"var(--mono)"}}>QUICK START</div>
-        <Term content={`<span class="t-p">$</span> <span class="t-c">git clone https://github.com/yourusername/k8s-secrets-lab</span>
-<span class="t-p">$</span> <span class="t-c">cd k8s-secrets-lab/lab-ui && npm install && npm run dev</span>
+        <Term content={`<span class="t-p">$</span> <span class="t-c">git clone https://github.com/Osomudeya/k8s-secret-lab</span>
+<span class="t-p">$</span> <span class="t-c">cd k8s-secret-lab/lab-ui && npm install && npm run dev</span>
 <span class="t-s">✓ Lab running at http://localhost:5173</span>
 <span class="t-o">   Now open a second terminal and follow the module steps</span>`}/>
         <div style={{marginBottom:10,fontSize:11,color:"var(--mu)",fontWeight:700,letterSpacing:2,fontFamily:"var(--mono)",marginTop:28}}>LEARNING PATH</div>

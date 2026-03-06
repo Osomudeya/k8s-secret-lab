@@ -15,7 +15,7 @@ terraform plan  -var="github_repo=YOUR_ORG/YOUR_REPO"
 terraform apply -var="github_repo=YOUR_ORG/YOUR_REPO"
 ```
 
-Example: `-var="github_repo=Osomudeya/k8s-secrets-lab"`. Default branch is `main`; override with `-var="github_branch=your-branch"` if needed.
+Example: `-var="github_repo=Osomudeya/k8s-secret-lab"`. Default branch is `main`; override with `-var="github_branch=your-branch"` if needed.
 
 ---
 
@@ -25,7 +25,7 @@ If you see **Provider with url https://token.actions.githubusercontent.com alrea
 
 ```bash
 terraform apply \
-  -var="github_repo=Osomudeya/k8s-secrets-lab" \
+  -var="github_repo=Osomudeya/k8s-secret-lab" \
   -var="use_existing_oidc_provider=true"
 ```
 

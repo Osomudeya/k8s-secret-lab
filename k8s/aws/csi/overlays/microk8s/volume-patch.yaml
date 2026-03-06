@@ -1,0 +1,19 @@
+# MicroK8s overlay: add nodePublishSecretRef so the CSI provider can call AWS
+# without IRSA. Create aws-csi-provider-credentials in default namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-csi
+  namespace: default
+spec:
+  template:
+    spec:
+      volumes:
+        - name: csi-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "aws-sm-lab"
+            nodePublishSecretRef:
+              name: aws-csi-provider-credentials

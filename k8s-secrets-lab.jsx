@@ -406,7 +406,7 @@ External secret managers solve all of this. Your app gets a clean K8s secret int
       "kind or minikube running locally",
       "Helm installed (v3.10+)",
       "GitHub account + repo for CI/CD module",
-      "Clone the companion repo: git clone https://github.com/yourusername/k8s-secrets-lab",
+      "Clone the companion repo: git clone https://github.com/Osomudeya/k8s-secret-lab",
     ],
     tip: "💡 For the AWS labs you can use the free tier. Create a dedicated IAM user with least-privilege permissions — we'll show you exactly which permissions you need.",
     code: {
@@ -511,7 +511,7 @@ External secret managers solve all of this. Your app gets a clean K8s secret int
 <span class="kw">resource</span> <span class="str">"kubectl_manifest"</span> <span class="str">"secret_store"</span> {
   <span class="key">depends_on</span> = [<span class="val">helm_release.external_secrets</span>]
   <span class="key">yaml_body</span> = <span class="val"><<-YAML</span>
-    apiVersion: external-secrets.io/v1beta1
+    apiVersion: external-secrets.io/v1
     kind: ClusterSecretStore
     metadata:
       name: aws-secrets-manager
@@ -544,7 +544,7 @@ external-secrets-webhook-xxx-yyy   1/1     Running   0</span>`,
     code: {
       filename: "k8s/external-secret.yaml",
       lang: "yaml",
-      content: `<span class="key">apiVersion</span>: <span class="val">external-secrets.io/v1beta1</span>
+      content: `<span class="key">apiVersion</span>: <span class="val">external-secrets.io/v1</span>
 <span class="key">kind</span>: <span class="val">ExternalSecret</span>
 <span class="key">metadata</span>:
   <span class="key">name</span>: <span class="val">app-db-secret</span>
@@ -667,7 +667,7 @@ DB_PASSWORD=super-secure-password-123</span>
     code: {
       filename: "k8s/external-secret-rotation.yaml",
       lang: "yaml",
-      content: `<span class="key">apiVersion</span>: <span class="val">external-secrets.io/v1beta1</span>
+      content: `<span class="key">apiVersion</span>: <span class="val">external-secrets.io/v1</span>
 <span class="key">kind</span>: <span class="val">ExternalSecret</span>
 <span class="key">metadata</span>:
   <span class="key">name</span>: <span class="val">app-db-secret</span>
@@ -888,7 +888,7 @@ function StepContentPanel({ moduleId, stepIdx }) {
         </div>
         <div className="tip-box">
           <span className="tip-icon">📦</span>
-          <p><strong>git clone https://github.com/yourusername/k8s-secrets-lab</strong> — the full repo has every step, all Terraform code, K8s manifests, and GitHub Actions workflows.</p>
+          <p><strong>git clone https://github.com/Osomudeya/k8s-secret-lab</strong> — the full repo has every step, all Terraform code, K8s manifests, and GitHub Actions workflows.</p>
         </div>
       </div>
     </div>
@@ -1070,8 +1070,8 @@ function HomeView({ onSelect }) {
               <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)"}}>terminal</span>
             </div>
             <div className="term-body">
-              <div><span className="t-prompt">$</span> <span className="t-cmd">git clone https://github.com/yourusername/k8s-secrets-lab</span></div>
-              <div><span className="t-prompt">$</span> <span className="t-cmd">cd k8s-secrets-lab</span></div>
+              <div><span className="t-prompt">$</span> <span className="t-cmd">git clone https://github.com/Osomudeya/k8s-secret-lab</span></div>
+              <div><span className="t-prompt">$</span> <span className="t-cmd">cd k8s-secret-lab</span></div>
               <div><span className="t-prompt">$</span> <span className="t-cmd">ls</span></div>
               <div><span className="t-out">terraform/  k8s/  .github/workflows/  README.md</span></div>
             </div>

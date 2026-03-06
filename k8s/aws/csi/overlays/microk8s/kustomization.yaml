@@ -1,0 +1,8 @@
+# MicroK8s: base + patch that adds nodePublishSecretRef for AWS credentials.
+resources:
+  - ../../base
+patches:
+  - path: volume-patch.yaml
+    target:
+      kind: Deployment
+      name: myapp-csi

@@ -62,55 +62,56 @@ data "aws_eks_cluster_auth" "created" {
 }
 
 # ------------------------------------------------------------------
-# Locals — resolve cluster connection details regardless of path
-# Paths:
-#   create_eks=true           → use resource outputs from eks.tf
-#   use_eks=true, create_eks=false → use data sources (existing cluster)
-#   use_eks=false             → use local kubeconfig (MicroK8s)
+# Locals — cluster connection and OIDC (for iam.tf); providers use only data below
 # ------------------------------------------------------------------
 locals {
   is_eks = var.use_eks || var.create_eks
 
+  # Only "existing EKS" (use_eks && !create_eks) has data sources; avoid resource refs in provider config
+  use_eks_connection = var.use_eks && !var.create_eks
+
   cluster_endpoint = var.create_eks ? aws_eks_cluster.cluster[0].endpoint : (
     var.use_eks ? data.aws_eks_cluster.cluster[0].endpoint : ""
   )
-
   cluster_ca = var.create_eks ? aws_eks_cluster.cluster[0].certificate_authority[0].data : (
     var.use_eks ? data.aws_eks_cluster.cluster[0].certificate_authority[0].data : ""
   )
-
   cluster_token = var.create_eks ? data.aws_eks_cluster_auth.created[0].token : (
     var.use_eks ? data.aws_eks_cluster_auth.cluster[0].token : ""
   )
 
-  # OIDC issuer — used in iam.tf to build IRSA trust policy
+  # OIDC issuer — used in iam.tf to build IRSA trust policy (resource-time only)
   oidc_issuer = var.create_eks ? aws_eks_cluster.cluster[0].identity[0].oidc[0].issuer : (
     var.use_eks ? data.aws_eks_cluster.cluster[0].identity[0].oidc[0].issuer : ""
   )
 }
 
 # ------------------------------------------------------------------
-# Providers — helm and kubectl use locals so they work for all paths
+# Providers — use only DATA SOURCES for EKS connection (never aws_eks_cluster resource).
+# This avoids "depends on values that cannot be determined until apply" when running
+# with MicroK8s (use_eks=false) or when importing (e.g. secret already in AWS).
+# - MicroK8s / local: use_eks_connection = false → config_path (kubeconfig).
+# - Existing EKS: use_eks_connection = true → data sources (unchanged).
+# - New EKS (create_eks=true): use_eks_connection = false → config_path; cluster is
+#   created in same apply; ensure kubeconfig is updated (e.g. spinup or update-kubeconfig) so Helm can connect.
 # ------------------------------------------------------------------
 provider "helm" {
   kubernetes {
-    # EKS paths: connect via API credentials
-    host                   = local.is_eks ? local.cluster_endpoint : null
-    cluster_ca_certificate = local.is_eks ? base64decode(local.cluster_ca) : null
-    token                  = local.is_eks ? local.cluster_token : null
+    host                   = local.use_eks_connection ? data.aws_eks_cluster.cluster[0].endpoint : null
+    cluster_ca_certificate = local.use_eks_connection ? base64decode(data.aws_eks_cluster.cluster[0].certificate_authority[0].data) : null
+    token                  = local.use_eks_connection ? data.aws_eks_cluster_auth.cluster[0].token : null
 
-    # Local path (MicroK8s): use kubeconfig file
-    config_path    = local.is_eks ? null : var.kubeconfig_path
-    config_context = local.is_eks ? null : (var.cluster_context != "" ? var.cluster_context : null)
+    config_path    = local.use_eks_connection ? null : var.kubeconfig_path
+    config_context = local.use_eks_connection ? null : (var.cluster_context != "" ? var.cluster_context : null)
   }
 }
 
 provider "kubectl" {
-  host                   = local.is_eks ? local.cluster_endpoint : null
-  cluster_ca_certificate = local.is_eks ? base64decode(local.cluster_ca) : null
-  token                  = local.is_eks ? local.cluster_token : null
+  host                   = local.use_eks_connection ? data.aws_eks_cluster.cluster[0].endpoint : null
+  cluster_ca_certificate = local.use_eks_connection ? base64decode(data.aws_eks_cluster.cluster[0].certificate_authority[0].data) : null
+  token                  = local.use_eks_connection ? data.aws_eks_cluster_auth.cluster[0].token : null
 
-  config_path      = local.is_eks ? null : var.kubeconfig_path
-  config_context   = local.is_eks ? null : (var.cluster_context != "" ? var.cluster_context : null)
-  load_config_file = !local.is_eks
+  config_path      = local.use_eks_connection ? null : var.kubeconfig_path
+  config_context   = local.use_eks_connection ? null : (var.cluster_context != "" ? var.cluster_context : null)
+  load_config_file = !local.use_eks_connection
 }

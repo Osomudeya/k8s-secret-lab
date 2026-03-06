@@ -9,7 +9,7 @@ const fs = require("fs");
 
 const PORT = process.env.PORT || 3000;
 const SECRET_KEYS = ["DB_USERNAME", "DB_PASSWORD", "DB_HOST", "DB_PORT"];
-const GITHUB_REPO_URL = "https://github.com/Osomudeya/k8s-secrets-lab";
+const GITHUB_REPO_URL = "https://github.com/Osomudeya/k8s-secret-lab";
 
 // Helper: mask a secret value for safe display
 // "super-secret-123" → "************123"

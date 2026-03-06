@@ -16,7 +16,7 @@ resource "helm_release" "external_secrets" {
   chart            = "external-secrets"
   namespace        = "external-secrets"
   create_namespace = true
-  version          = "0.9.11"
+  version          = "0.14.4"
 
   set {
     name  = "installCRDs"
@@ -40,7 +40,7 @@ resource "time_sleep" "wait_eso_crds" {
   count = local.install_eso ? 1 : 0
 
   depends_on      = [helm_release.external_secrets]
-  create_duration = "30s"
+  create_duration = "60s"
 }
 
 # ------------------------------------------------------------------
