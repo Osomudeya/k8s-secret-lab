@@ -1,7 +1,7 @@
 # Teardown — Terraform destroy (AWS and optionally Azure).
 # Manual only: run from Actions tab. Type "destroy" in the confirmation input to run.
 # Does NOT delete the EKS cluster; destroys Terraform-managed resources only.
-# When use_eks is true, deletes K8s resources (ExternalSecret, etc.) before destroy.
+# When repo secrets are not set, workflow exits successfully so readers don't see a failed run.
 name: Teardown
 
 on:
@@ -20,9 +20,21 @@ permissions:
   contents: read
 
 jobs:
+  teardown-skip:
+    name: Teardown skipped (no secrets)
+    runs-on: ubuntu-latest
+    if: secrets.AWS_ROLE_ARN == ''
+    steps:
+      - run: |
+          echo "## Teardown skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Repo secrets (AWS_ROLE_ARN, TF_BACKEND_*, etc.) are not set." >> $GITHUB_STEP_SUMMARY
+          echo "Configure them per [docs/DEPLOY-EKS.md](https://github.com/${{ github.repository }}/blob/main/docs/DEPLOY-EKS.md) to run Teardown from Actions." >> $GITHUB_STEP_SUMMARY
+          echo "For local lab, run \`bash teardown.sh\` from your machine." >> $GITHUB_STEP_SUMMARY
+
   teardown-aws:
     name: Terraform Destroy — AWS
     runs-on: ubuntu-latest
+    if: secrets.AWS_ROLE_ARN != ''
     environment: production
 
     defaults:

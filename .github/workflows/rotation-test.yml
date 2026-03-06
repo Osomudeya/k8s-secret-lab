@@ -1,5 +1,6 @@
 # Rotation test — end-to-end: rotate secret → verify /secrets/compare → restart pod → verify all_match.
 # Manual only: run from Actions tab after deploy. Requires EKS + app with LoadBalancer (or set ALB_URL).
+# When repo secrets are not set, workflow exits successfully so readers don't see a failed run.
 name: Rotation test (E2E)
 
 on:
@@ -14,9 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  rotation-skip:
+    name: Rotation test skipped (no secrets)
+    runs-on: ubuntu-latest
+    if: secrets.AWS_ROLE_ARN == ''
+    steps:
+      - run: |
+          echo "## Rotation test skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Repo secrets (AWS_ROLE_ARN, EKS_CLUSTER_NAME, etc.) are not set." >> $GITHUB_STEP_SUMMARY
+          echo "Configure them per [docs/DEPLOY-EKS.md](https://github.com/${{ github.repository }}/blob/main/docs/DEPLOY-EKS.md), or run \`bash rotation/test-rotation.sh\` locally with kubectl + AWS configured." >> $GITHUB_STEP_SUMMARY
+
   rotation-test:
     name: Rotate secret and verify
     runs-on: ubuntu-latest
+    if: secrets.AWS_ROLE_ARN != ''
     environment: production
 
     steps:
